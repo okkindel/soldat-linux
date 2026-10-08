@@ -288,9 +288,8 @@ begin
 
       case ButtonIndex of
         0: begin
-          ClientDisconnect;
-
-          Halt(0);
+          ExitToMenu;
+          MenuStatus := '';
         end;
         1: GameMenuShow(MapMenu, not MapMenu.Active);
         2: GameMenuShow(KickMenu, not KickMenu.Active);

@@ -25,6 +25,7 @@ var
   Textures: TGfxSpriteArray;
 
 function InitGameGraphics: Boolean;
+procedure ResizeGameGraphics;
 procedure ReloadGraphics;
 procedure DestroyGameGraphics();
 procedure RenderFrame(TimeElapsed, FramePercent: Extended; Paused: Boolean);
@@ -528,6 +529,43 @@ begin
   end;
 end;
 
+procedure CreateRenderTargets;
+begin
+  if ActionSnapTexture <> nil then
+    GfxDeleteTexture(ActionSnapTexture);
+  if RenderTarget <> nil then
+    GfxDeleteTexture(RenderTarget);
+  if RenderTargetAA <> nil then
+    GfxDeleteTexture(RenderTargetAA);
+
+  if cl_actionsnap.Value then
+    ActionSnapTexture := GfxCreateRenderTarget(RenderWidth, RenderHeight, 4, True);
+
+  if GfxFramebufferSupported then
+  begin
+    if (WindowWidth <> RenderWidth) or (WindowHeight <> RenderHeight) then
+    begin
+      RenderTarget := GfxCreateRenderTarget(RenderWidth, RenderHeight, 4, True);
+
+      if RenderTarget.Samples > 0 then
+      begin
+        RenderTargetAA := GfxCreateRenderTarget(RenderWidth, RenderHeight, 4, False);
+
+        if r_resizefilter.Value >= 2 then
+          GfxTextureFilter(RenderTargetAA, GFX_LINEAR, GFX_LINEAR)
+        else
+          GfxTextureFilter(RenderTargetAA, GFX_NEAREST, GFX_NEAREST);
+      end else
+      begin
+        if r_resizefilter.Value >= 2 then
+          GfxTextureFilter(RenderTarget, GFX_LINEAR, GFX_LINEAR)
+        else
+          GfxTextureFilter(RenderTarget, GFX_NEAREST, GFX_NEAREST);
+      end;
+    end;
+  end;
+end;
+
 function InitGameGraphics: Boolean;
 var
   WindowFlags: LongWord;
@@ -561,7 +599,7 @@ begin
   else if r_fullscreen.Value = 1 then
     WindowFlags := WindowFlags or SDL_WINDOW_FULLSCREEN
   else
-    WindowFlags := WindowFlags;
+    WindowFlags := WindowFlags or SDL_WINDOW_RESIZABLE;
 
   // OPENGL ES3 TEST
   //SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
@@ -575,7 +613,8 @@ begin
   end;
 
   GameWindow := SDL_CreateWindow('Soldat'{$IFDEF TESTING} + ' build ' + SOLDAT_VERSION_LONG{$ENDIF},
-    SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, WindowWidth, WindowHeight, WindowFlags);
+    SDL_WINDOWPOS_CENTERED_DISPLAY(VideoDisplayIndex),
+    SDL_WINDOWPOS_CENTERED_DISPLAY(VideoDisplayIndex), WindowWidth, WindowHeight, WindowFlags);
 
   FileBuffer := PHYSFS_readBuffer('icon.bmp');
 
@@ -590,6 +629,8 @@ begin
       Result := False;
       Exit;
      end;
+
+  SDL_SetWindowMinimumSize(GameWindow, 640, 480);
 
   if not GfxInitContext(GameWindow, r_dithering.Value, r_compatibility.Value) then
   begin
@@ -615,34 +656,28 @@ begin
   if not GfxFramebufferSupported then
     cl_actionsnap.SetValue(False);
 
-  if cl_actionsnap.Value then
-    ActionSnapTexture := GfxCreateRenderTarget(RenderWidth, RenderHeight, 4, True);
-
-  if GfxFramebufferSupported then
-  begin
-    if (WindowWidth <> RenderWidth) or (WindowHeight <> RenderHeight) then
-    begin
-      RenderTarget := GfxCreateRenderTarget(RenderWidth, RenderHeight, 4, True);
-
-      if RenderTarget.Samples > 0 then
-      begin
-        RenderTargetAA := GfxCreateRenderTarget(RenderWidth, RenderHeight, 4, False);
-
-        if r_resizefilter.Value >= 2 then
-          GfxTextureFilter(RenderTargetAA, GFX_LINEAR, GFX_LINEAR)
-        else
-          GfxTextureFilter(RenderTargetAA, GFX_NEAREST, GFX_NEAREST);
-      end else
-      begin
-        if r_resizefilter.Value >= 2 then
-          GfxTextureFilter(RenderTarget, GFX_LINEAR, GFX_LINEAR)
-        else
-          GfxTextureFilter(RenderTarget, GFX_NEAREST, GFX_NEAREST);
-      end;
-    end;
-  end;
+  CreateRenderTargets();
 
   Initialized := True;
+end;
+
+// Called after the window or render size changed at runtime.
+procedure ResizeGameGraphics;
+var
+  i: Integer;
+begin
+  if not Initialized then
+    Exit;
+
+  if SDL_GL_SetSwapInterval(r_swapeffect.Value) = -1 then
+    GfxLog('Error while setting SDL_GL_SetSwapInterval:' + SDL_GetError());
+
+  CreateRenderTargets();
+
+  for i := Low(Fonts) to High(Fonts) do
+    GfxDeleteFont(Fonts[i]);
+
+  LoadFonts();
 end;
 
 procedure ReloadGraphics;
@@ -1081,6 +1116,9 @@ procedure RenderGameInfo(TextString: WideString);
 var
   rc: TGfxRect;
 begin
+  // remembered so the main menu can show why we got back there
+  MenuStatus := TextString;
+
   GfxTarget(nil);
   GfxViewport(0, 0, WindowWidth, WindowHeight);
   GfxTransform(GfxMat3Ortho(0, WindowWidth, 0, WindowHeight));
@@ -1093,7 +1131,7 @@ begin
   GfxBegin();
   GfxDrawText((WindowWidth - RectWidth(rc)) / 2, (WindowHeight - RectHeight(rc)) / 2);
   SetFontStyle(FONT_SMALL);
-  rc := GfxTextMetrics(_('Press ESC to quit the game'));
+  rc := GfxTextMetrics(_('Press ESC to return to the menu'));
   GfxDrawText((WindowWidth - RectWidth(rc)) / 2, ((WindowHeight - RectHeight(rc)) / 2) + 100);
   GfxEnd();
   GfxPresent(True);

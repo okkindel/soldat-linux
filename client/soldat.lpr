@@ -59,4 +59,5 @@ begin
   DefaultSystemCodePage := CP_UTF8;
 
   StartGame;
+  RunClient;
 end.

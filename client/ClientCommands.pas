@@ -79,15 +79,17 @@ begin
     else
       JoinPort := Args[2];
     if Length(Args) > 3 then
-      JoinPassword := Args[3];
+      JoinPassword := Args[3]
+    else
+      JoinPassword := '';
   end;
-  JoinServer();
+  RequestJoin;
 end;
 
 procedure CommandRetry(Args: array of AnsiString; Sender: Byte);
 begin
   ExitToMenu;
-  JoinServer();
+  RequestJoin;
 end;
 
 procedure CommandDisconnect(Args: array of AnsiString; Sender: Byte);
@@ -194,6 +196,7 @@ end;
 procedure CommandShutdown(Args: array of AnsiString; Sender: Byte);
 begin
   ExitToMenu;
+  RequestQuit;
 end;
 
 procedure CommandScreenshot(Args: array of AnsiString; Sender: Byte);

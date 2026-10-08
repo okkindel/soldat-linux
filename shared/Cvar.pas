@@ -734,6 +734,7 @@ begin
   {$IFNDEF SERVER}
   // Render Cvars
   r_fullscreen := TIntegerCvar.Add('r_fullscreen', 'Set mode of fullscreen', 0, 0, [CVAR_CLIENT], nil, 0, 2);
+  r_display := TIntegerCvar.Add('r_display', 'Index of the monitor the game window is shown on', 0, 0, [CVAR_CLIENT], nil, 0, 15);
   r_weathereffects := TBooleanCvar.Add('r_weathereffects', 'Weather effects', True, True, [CVAR_CLIENT], nil);
   r_dithering := TBooleanCvar.Add('r_dithering', 'Dithering', False, False, [CVAR_CLIENT], nil);
   r_swapeffect := TIntegerCvar.Add('r_swapeffect', 'Swap interval, 0 for immediate updates, 1 for updates synchronized with the vertical retrace, -1 for late swap tearing', 0, 0, [CVAR_CLIENT], nil, -1, 1);
@@ -809,6 +810,7 @@ begin
 
   cl_runs := TIntegerCvar.Add('cl_runs', 'Game runs', 0, 0, [CVAR_CLIENT], nil, 0, 32);
   cl_lang := TStringCvar.Add('cl_lang', 'Game language', '', '', [CVAR_CLIENT, CVAR_INITONLY], nil, 0, 2);
+  cl_lobbyurl := TStringCvar.Add('cl_lobbyurl', 'URL of the lobby server used for the server list', 'https://api.soldat.pl', 'https://api.soldat.pl', [CVAR_CLIENT], nil, 1, 256);
 
 
   // Demo cvars

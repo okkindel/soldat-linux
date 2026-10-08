@@ -8,6 +8,8 @@ uses
 procedure CommandInit();
 function ParseInput(Input: String; Sender: Byte = 0): Boolean; overload;
 function LoadConfig(ConfigName: AnsiString): Boolean;
+function SaveConfig(ConfigName: AnsiString; const CvarNames: array of AnsiString;
+  Overrides: TStrings = nil): Boolean;
 
 const
   MAX_COMMANDS = 1024;
@@ -475,6 +477,96 @@ begin
       Result := False;
       MainConsole.Console('Failed to load config file: ' + ConfigName, WARNING_MESSAGE_COLOR);
     end;
+  end;
+end;
+
+// Writes the current values of the given cvars into a config file. Lines that
+// already set one of these cvars are updated in place, everything else (binds,
+// comments, other commands) is preserved. Missing cvars are appended.
+// Overrides (name=value) replace the current value, which is needed for cvars
+// that can only be changed at startup.
+function SaveConfig(ConfigName: AnsiString; const CvarNames: array of AnsiString;
+  Overrides: TStrings = nil): Boolean;
+var
+  Path, Line, Name: string;
+  Lines: TStringList;
+  Saved: array of Boolean;
+  ACvar: TCvarBase;
+  i, j, Added: Integer;
+
+  function CvarValue(const CvarName: string): string;
+  begin
+    if (Overrides <> nil) and (Overrides.IndexOfName(CvarName) >= 0) then
+      Result := Overrides.Values[CvarName]
+    else
+      Result := ACvar.ValueAsString;
+    Result := CvarName + ' ' + AnsiQuotedStr(Result, '"');
+  end;
+
+begin
+  Result := False;
+  Path := UserDirectory + 'configs/' + ConfigName;
+  Lines := TStringList.Create;
+  try
+    try
+      if FileExists(Path) then
+        Lines.LoadFromFile(Path);
+
+      SetLength(Saved, Length(CvarNames));
+
+      for i := 0 to Lines.Count - 1 do
+      begin
+        Line := Trim(Lines[i]);
+        if (Line = '') or AnsiStartsStr('//', Line) then
+          Continue;
+
+        j := Pos(' ', Line);
+        if j = 0 then
+          Name := LowerCase(Line)
+        else
+          Name := LowerCase(Copy(Line, 1, j - 1));
+
+        for j := Low(CvarNames) to High(CvarNames) do
+        begin
+          if Name = CvarNames[j] then
+          begin
+            ACvar := TCvarBase.Find(Name);
+            if ACvar <> nil then
+            begin
+              Lines[i] := CvarValue(Name);
+              Saved[j] := True;
+            end;
+            Break;
+          end;
+        end;
+      end;
+
+      Added := 0;
+      for j := Low(CvarNames) to High(CvarNames) do
+      begin
+        if Saved[j] then
+          Continue;
+        ACvar := TCvarBase.Find(CvarNames[j]);
+        if ACvar = nil then
+          Continue;
+        if Added = 0 then
+        begin
+          Lines.Add('');
+          Lines.Add('// Settings saved from the game menu');
+        end;
+        Lines.Add(CvarValue(CvarNames[j]));
+        Inc(Added);
+      end;
+
+      Lines.SaveToFile(Path);
+      Result := True;
+    except
+      on E: Exception do
+        MainConsole.Console('Failed to save config file: ' + ConfigName + ' (' + E.Message + ')',
+          WARNING_MESSAGE_COLOR);
+    end;
+  finally
+    Lines.Free;
   end;
 end;
 
