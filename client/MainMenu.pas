@@ -23,7 +23,7 @@ uses
   SDL2, SysUtils, Classes, Math, StrUtils,
   Gfx, Vector, Client, ClientGame, GameRendering, GostekGraphics, Sprites,
   Anims, Parts, Game, Net, Weapons, Constants, Cvar, Command, Input,
-  GameStrings, ServerList, Sound, Version, Process;
+  GameStrings, ServerList, Sound, Version, Process, PhysFS, LegacyOverlay;
 
 const
   // everything is laid out in a 1280x720 design space scaled to the window
@@ -33,11 +33,11 @@ const
   CONFIG_FILE = 'client.cfg';
   FAVORITES_FILE = 'favorites.txt';
 
-  PLAYER_CVARS: array[0..10] of AnsiString = (
+  PLAYER_CVARS: array[0..11] of AnsiString = (
     'cl_player_name', 'cl_player_shirt', 'cl_player_pants', 'cl_player_skin',
     'cl_player_hair', 'cl_player_jet', 'cl_player_hairstyle',
     'cl_player_headstyle', 'cl_player_chainstyle', 'cl_player_secwep',
-    'cl_legacy_client'
+    'cl_legacy_client', 'cl_mapvote_command'
   );
 
   GRAPHICS_CVARS: array[0..14] of AnsiString = (
@@ -57,6 +57,8 @@ const
   ID_SLIDER_G    = 6;
   ID_SLIDER_B    = 7;
   ID_LEGACY      = 8;
+  ID_MAPSEARCH   = 9;
+  ID_MAPCOMMAND  = 10;
 
   ROW_H = 26;
 
@@ -113,6 +115,16 @@ var
   Favorites: TStringList; // "ip:port" of servers starred by the player
   LegacyText: WideString = '';
   LegacyProcess: TProcess;
+
+  // map vote overlay for the 1.7 client, opened with F10 in game
+  MapVoteActive: Boolean = False;
+  MapNames: TStringList;
+  MapSearch: WideString = '';
+  MapCommandText: WideString = '';
+  MapScroll: Integer = 0;
+
+  // MenuStatus is shown as information (not as an error) while it equals this
+  InfoStatus: WideString = '';
 
   // player
   NameText: WideString = '';
@@ -763,6 +775,12 @@ end;
 // the protocol of the servers this client can't join.
 // Reaps the 1.7 client once it quit (TProcess.Running waits for it without
 // blocking, so it doesn't stay around as a zombie) and reports a crash.
+procedure SetInfoStatus(const Text: WideString);
+begin
+  MenuStatus := Text;
+  InfoStatus := Text;
+end;
+
 procedure CheckLegacyProcess;
 begin
   if (LegacyProcess = nil) or LegacyProcess.Running then
@@ -772,6 +790,8 @@ begin
     MenuStatus := WideFormat(_('The Soldat 1.7 client quit with an error (%d). Try joining again.'),
       [LegacyProcess.ExitCode]);
   FreeAndNil(LegacyProcess);
+  OverlayStop;
+  MapVoteActive := False;
 end;
 
 // cl_legacy_client, or the client in legacy/ of the user directory (copied
@@ -832,6 +852,7 @@ end;
 function LaunchLegacyClient(const Server: TServerEntry): Boolean;
 var
   Path: string;
+  i: Integer;
 begin
   Result := False;
   Path := LegacyClientPath;
@@ -858,10 +879,16 @@ begin
   if PasswordText <> '' then
     LegacyProcess.Parameters.Add(UTF8Encode(PasswordText));
 
+  // keep the game visible (not minimized) while the map vote overlay is up
+  for i := 1 to GetEnvironmentVariableCount do
+    LegacyProcess.Environment.Add(GetEnvironmentString(i));
+  LegacyProcess.Environment.Add('SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS=0');
+
   try
     LegacyProcess.Execute;
-    MenuStatus := WideFormat(_('Started the Soldat %s client for %s'),
-      [WideString(Server.Version), WideString(Server.Name)]);
+    OverlayStart(LegacyProcess.ProcessID);
+    SetInfoStatus(WideFormat(_('Started the Soldat %s client for %s. Press F10 in game to change the map.'),
+      [WideString(Server.Version), WideString(Server.Name)]));
     Result := True;
   except
     on E: Exception do
@@ -1271,6 +1298,188 @@ begin
   end;
   if (LegacyText <> '') and not FileExists(UTF8Encode(LegacyText)) then
     DrawText(_('File not found'), LIST_X + 925, y, Color(C_ERROR), 15, 28);
+end;
+
+{******************************************************************************}
+{*                         Map vote for the 1.7 client                        *}
+{******************************************************************************}
+
+procedure AddMapsFromDirectory(const Dir: string);
+var
+  Info: TSearchRec;
+begin
+  if FindFirst(Dir + '*.pms', faAnyFile, Info) = 0 then
+  begin
+    repeat
+      MapNames.Add(ChangeFileExt(Info.Name, ''));
+    until FindNext(Info) <> 0;
+    FindClose(Info);
+  end;
+end;
+
+// Maps the game ships with plus the ones downloaded from servers. Which of
+// them a server has is unknown, servers answer the command anyway.
+procedure LoadMapNames;
+var
+  Files: TStringArray;
+  i: Integer;
+  LegacyDir: string;
+begin
+  if MapNames = nil then
+  begin
+    MapNames := TStringList.Create;
+    MapNames.Sorted := True;
+    MapNames.Duplicates := dupIgnore;
+    MapNames.CaseSensitive := False;
+  end;
+  MapNames.Clear;
+
+  Files := PHYSFS_GetEnumeratedFiles('maps');
+  for i := 0 to High(Files) do
+    if SameText(ExtractFileExt(Files[i]), '.pms') then
+      MapNames.Add(ChangeFileExt(ExtractFileName(Files[i]), ''));
+
+  AddMapsFromDirectory(UserDirectory + 'maps/');
+  LegacyDir := ExtractFilePath(LegacyClientPath);
+  if LegacyDir <> '' then
+  begin
+    AddMapsFromDirectory(LegacyDir + 'maps/');
+    AddMapsFromDirectory(LegacyDir + 'downloads/maps/');
+  end;
+end;
+
+procedure OpenMapVote;
+begin
+  if MapVoteActive or (LegacyProcess = nil) then
+    Exit;
+
+  MapVoteActive := True;
+  LoadMapNames;
+  MapSearch := '';
+  MapScroll := 0;
+  MapCommandText := WideString(cl_mapvote_command.Value);
+  FocusId := ID_MAPSEARCH;
+  SDL_StartTextInput;
+
+  // bring the menu window in front of the game
+  SDL_RestoreWindow(GameWindow);
+  SDL_RaiseWindow(GameWindow);
+  OverlayActivate(GetProcessID);
+end;
+
+procedure CloseMapVote(BackToGame: Boolean);
+begin
+  MapVoteActive := False;
+  FocusId := ID_NONE;
+  SDL_StopTextInput;
+  if BackToGame and (LegacyProcess <> nil) then
+    OverlayActivate(LegacyProcess.ProcessID);
+end;
+
+procedure SendMapVote(const Map: string);
+var
+  Command: string;
+begin
+  if UTF8Encode(MapCommandText) <> cl_mapvote_command.Value then
+    if cl_mapvote_command.SetValue(UTF8Encode(MapCommandText)) then
+    begin
+      PlayerDirty := True;
+      SaveSettings;
+    end;
+
+  Command := cl_mapvote_command.Value;
+  if Pos('%s', Command) > 0 then
+    Command := StringReplace(Command, '%s', Map, [])
+  else
+    Command := Command + ' ' + Map;
+
+  CloseMapVote(False);
+  if OverlayTypeInGame(Command) then
+    SetInfoStatus(WideFormat(_('Typed "%s" into the game chat.'), [WideString(Command)]))
+  else
+    MenuStatus := _('Could not type into the game. Is the Soldat 1.7 client still running?');
+end;
+
+procedure DrawMapVote;
+const
+  PX = 200;
+  PY = 88;
+  PW = 880;
+  PH = 590;
+  COLS = 3;
+  CELL_W = 280;
+  CELL_H = 30;
+  VISIBLE_ROWS = 12;
+var
+  Filtered: array of string;
+  Search: string;
+  i, n, Row, Col, Rows: Integer;
+  x, y: Single;
+begin
+  FillRect(PX, PY, PW, PH, Color(C_PANEL, 245));
+  StrokeRect(PX, PY, PW, PH, Color(C_ACCENT));
+
+  DrawText(_('Change map'), PX + 24, PY + 12, Color(C_ACCENT), 22, 32, True);
+  DrawText(_('F10 or Esc to go back to the game'), PX + 300, PY + 12, Color(C_TEXT_DIM), 14, 32);
+
+  TextField(ID_MAPSEARCH, MapSearch, PX + 24, PY + 56, 420, 34, 64, _('Search map'));
+  DrawText(_('Command'), PX + 470, PY + 56, Color(C_TEXT_DIM), 15, 34);
+  TextField(ID_MAPCOMMAND, MapCommandText, PX + 580, PY + 56, 276, 34, 128, '!map %s');
+
+  Search := LowerCase(Trim(UTF8Encode(MapSearch)));
+  SetLength(Filtered, 0);
+  for i := 0 to MapNames.Count - 1 do
+    if (Search = '') or (Pos(Search, LowerCase(MapNames[i])) > 0) then
+    begin
+      SetLength(Filtered, Length(Filtered) + 1);
+      Filtered[High(Filtered)] := MapNames[i];
+    end;
+
+  // list in columns, scrolled by rows
+  Rows := (Length(Filtered) + COLS - 1) div COLS;
+  if Inside(PX, PY + 100, PW, VISIBLE_ROWS * CELL_H) then
+    MapScroll := MapScroll - WheelDelta;
+  MapScroll := EnsureRange(MapScroll, 0, Max(0, Rows - VISIBLE_ROWS));
+
+  for Row := 0 to VISIBLE_ROWS - 1 do
+    for Col := 0 to COLS - 1 do
+    begin
+      n := (MapScroll + Row) * COLS + Col;
+      if n > High(Filtered) then
+        Continue;
+      x := PX + 24 + Col * CELL_W;
+      y := PY + 104 + Row * CELL_H;
+      if Inside(x, y, CELL_W - 8, CELL_H - 2) then
+      begin
+        FillRect(x, y, CELL_W - 8, CELL_H - 2, Color(C_HOVER));
+        if MouseClicked then
+        begin
+          PlaySound(SFX_MENUCLICK);
+          SendMapVote(Filtered[n]);
+          Exit;
+        end;
+      end;
+      DrawText(FitText(WideString(Filtered[n]), CELL_W - 20, 15), x + 8, y, Color(C_TEXT), 15, CELL_H - 2);
+    end;
+
+  if Length(Filtered) = 0 then
+    DrawTextCentered(_('No maps found'), PX, PY + 104, PW, VISIBLE_ROWS * CELL_H, Color(C_TEXT_DIM));
+
+  // Enter picks the only / first match
+  if KeyEnter and (FocusId = ID_MAPSEARCH) and (Length(Filtered) > 0) then
+  begin
+    SendMapVote(Filtered[0]);
+    Exit;
+  end;
+
+  // footer: hint above, count and button below
+  FillRect(PX + 24, PY + PH - 98, PW - 48, 1, Color(C_PANEL_LINE));
+  DrawText(FitText(_('The command is typed into the game chat (chat key T). It works on servers ' +
+    'with a map command, like !map.'), PW - 48, 13), PX + 24, PY + PH - 90, Color(C_TEXT_DIM), 13, 24);
+  DrawText(WideFormat(_('%d maps'), [Length(Filtered)]), PX + 24, PY + PH - 50,
+    Color(C_TEXT_DIM), 14, 32);
+  if Button(_('Cancel'), PX + PW - 144, PY + PH - 50, 120, 32) then
+    CloseMapVote(True);
 end;
 
 {******************************************************************************}
@@ -2115,18 +2324,21 @@ begin
     RequestQuit;
   end;
 
-  case Tab of
-    tabServers: DrawServersTab;
-    tabPlayer: DrawPlayerTab;
-    tabGraphics: DrawGraphicsTab;
-  end;
+  if MapVoteActive then
+    DrawMapVote
+  else
+    case Tab of
+      tabServers: DrawServersTab;
+      tabPlayer: DrawPlayerTab;
+      tabGraphics: DrawGraphicsTab;
+    end;
 
   // status line
   Status := MenuStatus;
   if Status <> '' then
   begin
     FillRect(-OffsetX / Scale, DESIGN_H - 32, DrawW / Scale, 32, Color($0B0D08, 200));
-    DrawText(FitText(Status, DESIGN_W - 80, 15), 40, DESIGN_H - 32, Color(C_ERROR), 15, 32);
+    DrawText(FitText(Status, DESIGN_W - 80, 15), 40, DESIGN_H - 32, Color(Choose(Status = InfoStatus, C_ACCENT, C_ERROR)), 15, 32);
   end;
 
   GfxEnd();
@@ -2192,7 +2404,18 @@ begin
       SDL_StopTextInput;
     end;
 
-    HandleListKeys;
+    if OverlayHotkeyPressed then
+    begin
+      if MapVoteActive then
+        CloseMapVote(True)
+      else
+        OpenMapVote;
+    end
+    else if MapVoteActive and KeyEscape then
+      CloseMapVote(True);
+
+    if not MapVoteActive then
+      HandleListKeys;
     CheckLegacyProcess;
     RenderMenu;
 
@@ -2210,4 +2433,5 @@ finalization
   FreeAndNil(PreviewPlayer);
   FreeAndNil(Favorites);
   FreeAndNil(LegacyProcess);
+  FreeAndNil(MapNames);
 end.

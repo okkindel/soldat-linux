@@ -38,6 +38,8 @@ Soldat 1.8 (this code) and Soldat 1.7.1 use different network protocols, so this
 3. When you join a 1.7.1 server, the menu writes your nickname, look, display and sound settings into the 1.7.1 client's own `configs/client.cfg` (it uses the same cvars) and starts it with `-join ip port [password]`. Its binds and other settings stay untouched.
 4. Because it is the official client, the servers' anti-cheat works as usual.
 
+5. **Changing the map:** the map vote menu of the 1.7.1 client doesn't work. Press **F10** in game instead: the menu comes up with a searchable list of maps, and picking one types the map command into the game chat for you (chat key T, then Enter). The command defaults to `!map <map>`, which servers with a map script (for example the #Rzal ones) understand; it can be changed in the same panel (saved as `cl_mapvote_command`, `%s` is the map name).
+
 Limitations: the 1.7.1 client can't be told which monitor to use, so it opens where it decides. A custom 1.7.1 client path can be set in the field at the bottom of the *Servers* tab (saved as `cl_legacy_client`).
 
 ## Dependencies
