@@ -8,6 +8,38 @@ Opensoldat is a unique 2D (side-view) multiplayer action game. It has been influ
 
 This repository contains the source code of the so-called 1.8 version. Compared to the original version, the code has undergone many changes but is not in a finished state. We hope that by open-sourcing Soldat we can empower our community to improve the game at a faster pace.
 
+## okkindel remix: Soldat 1.8 and 1.7.1 on Linux
+
+This fork is a version of opensoldat that you can build on Linux and that runs natively, without Wine. It adds a game menu and lets you play on both Soldat 1.8 and Soldat 1.7.1 servers from one server list.
+
+- **Game menu.** The game starts in a menu instead of requiring `-join`, and returns there after leaving a server:
+  - *Servers*: the public server list (the same one as on [soldat.pl/lobby](https://www.soldat.pl/pl/lobby)) with search, filters (mode, players, country, version, OS, password, realistic, survival), sorting, ping, favorites pinned to the top, and direct connect by address.
+  - *Player*: nickname, colors, hair, headgear, chain and secondary weapon with a live preview of your soldier.
+  - *Graphics*: monitor, window mode, resolution, vsync, frame limit, texture and scaling filters. Changes apply without a restart, and the window can be resized in windowed mode.
+- **Settings are saved** to `client.cfg`, keeping your binds.
+- **Soldat 1.8 and 1.7.1 servers** both work, see below.
+
+### Installing
+
+Download `soldat_<version>_amd64.deb` from [Releases](https://github.com/okkindel/soldat/releases) and install it:
+
+```sh
+sudo apt install ./soldat_*_amd64.deb
+```
+
+Then start *Soldat* from the applications menu, or run `soldat`. The package targets Ubuntu 22.04 / Linux Mint 21 and newer. The game is installed to `/opt/soldat`, your settings, logs, screenshots and downloaded maps are kept in `~/.local/share/soldat`.
+
+### How playing on 1.7.1 servers works
+
+Soldat 1.8 (this code) and Soldat 1.7.1 use different network protocols, so this client cannot talk to 1.7.1 servers itself. Nearly all public servers still run 1.7.1. To play there anyway:
+
+1. The server list shows each server's version. 1.8 servers are joined by this client directly. Servers with another version (shown in red) are joined with the **original native Soldat 1.7.1 Linux client**.
+2. That client is the official build linked from the [Soldat wiki](https://wiki.soldat.pl/index.php/Soldat_on_macOS_and_Linux). It is not part of this repository: CMake downloads it from `update.soldat.pl` while building (checking its SHA256), and the Debian package ships it in `/opt/soldat/legacy`.
+3. When you join a 1.7.1 server, the menu writes your nickname, look, display and sound settings into the 1.7.1 client's own `configs/client.cfg` (it uses the same cvars) and starts it with `-join ip port [password]`. Its binds and other settings stay untouched.
+4. Because it is the official client, the servers' anti-cheat works as usual.
+
+Limitations: the 1.7.1 client can't be told which monitor to use, so it opens where it decides. A custom 1.7.1 client path can be set in the field at the bottom of the *Servers* tab (saved as `cl_legacy_client`).
+
 ## Dependencies
 
 - FreePascal 3.0.4
@@ -19,7 +51,7 @@ This repository contains the source code of the so-called 1.8 version. Compared 
 
 ## Building opensoldat
 
-Opensoldat compiles on Windows, Linux and macOS.
+This fork is built and tested on Linux. (Upstream opensoldat also compiles on Windows and macOS, see the [original repository](https://github.com/opensoldat/opensoldat).)
 
 ### Compilation using CMake
 
@@ -33,28 +65,11 @@ CMake 3.14+ is required.
 2. `mkdir build && cd build`
 3. `cmake ..`
 4. `make`
+5. Run `bin/soldat` (the game starts in the menu)
 
-#### Build steps for Windows
+On Linux x86_64, `cmake` also downloads the native Soldat 1.7.1 client (~185 MB) into `bin/legacy`, used for 1.7.1 servers. Pass `-DADD_LEGACY_CLIENT=0` to skip it.
 
-1. Install [freepascal 3.0.4](https://sourceforge.net/projects/freepascal/files/Win32/3.0.4/) (install `fpc-3.0.4.i386-win32.exe` first, and then `fpc-3.0.4.i386-win32.cross.x86_64-win64.exe`)
-2. Install [Visual Studio with C++ compiler/build tools](https://visualstudio.microsoft.com/en) and [vcpkg](https://github.com/Microsoft/vcpkg)
-3. Open Developer command prompt for Visual Studio
-4. `vcpkg.exe --triplet x64-windows install sdl2 physfs openssl protobuf freetype openal-soft`
-5. `set PATH=%PATH%;C:\fpc\3.0.4\bin\i386-win32`
-6. `set OPENSSL_ROOT_DIR=C:\vcpkg\installed\x64-windows`
-7. `set PHYSFSDIR=C:\vcpkg\installed\x64-windows`
-8. `mkdir build`
-9. `cd build`
-10. `cmake -G "NMake Makefiles" -DCROSS_WINDOWS_64=1 -DCMAKE_TOOLCHAIN_FILE="C:\vcpkg\scripts\buildsystems\vcpkg.cmake" -DSDL2_BUILDING_LIBRARY=1 ..`
-11. `nmake`
-
-#### Build steps for macOS
-
-1. `brew install openssl@1.1 protobuf fpc cmake sdl2 physfs freetype2`
-2. `mkdir build && cd build`
-3. `export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:/usr/local/opt/openssl@1.1/lib/pkgconfig`
-4. `cmake -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@1.1) ..`
-5. `make`
+To build an installable Debian/Ubuntu/Mint package, run `make deb` in the `build` directory. It creates `soldat_<version>_amd64.deb` (needs `dpkg-deb`, and `unzip` plus ImageMagick's `convert` for the menu icon).
 
 #### Available flags
 
@@ -73,14 +88,8 @@ If you decide to follow the approaches below, you will have to download opensold
 5. Download `play-regular.ttf` file from [base repository](https://github.com/opensoldat/base), either from the [latest release](https://github.com/opensoldat/base/releases/latest) or from `base/client` folder
 6. Copy `play-regular.ttf` file to `client/build`
 
-#### Compilation using Lazarus IDE
-
-1. Install [Lazarus IDE](https://www.lazarus-ide.org/)
-2. Open `server/soldatserver.lpi` with Lazarus, press CTRL + F9 to compile the server
-3. Open `client/soldat.lpi` with Lazarus, press CTRL + F9 to compile the game client
-
 ## Running opensoldat
 
-You need to start the server first, and then join the game with client.
-1. Run `soldatserver`
-2. Run `soldat -join 127.0.0.1 23073` (more generically `-join ip port`)
+Run `soldat` and pick a server in the menu. To join a server directly without the menu, run `soldat -join ip port` (for example `soldat -join 127.0.0.1 23073`).
+
+To host your own server, run `soldatserver` and connect to it by its address in the menu.

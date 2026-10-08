@@ -25,21 +25,7 @@ constructor TLobbyThread.Create();
 
 function GetOS(): Integer;
 begin
-  Result :=
-  {$IFDEF MSWINDOWS}
-    0
-  {$ELSE}
-    {$IFDEF LINUX}
-    1
-    {$ELSE}
-      {$IFDEF DARWIN}
-    2
-      {$ELSE}
-    -1
-      {$ENDIF}
-    {$ENDIF}
-  {$ENDIF}
-  ;
+  Result := 1; // Linux
 end;
 
 var

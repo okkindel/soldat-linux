@@ -12,9 +12,6 @@ interface
 
 uses
   // system and delphi units
-  {$IFDEF MSWINDOWS}
-  MMSystem,
-  {$ENDIF}
   SysUtils, Classes, Math, GameStrings, Variants, FileClient,
 
   // graphics units
@@ -757,11 +754,6 @@ begin
   // TODO remove HWIDs, replace by Fae auth tickets
   HWID := '00000000000';
 
-  {$IFDEF MSWINDOWS}
-  if r_sleeptime.Value > 0 then
-    timeBeginPeriod(r_sleeptime.Value);
-  {$ENDIF}
-
   Initing := 0;
   DefaultFormatSettings.DecimalSeparator := '.';
   DefaultFormatSettings.DateSeparator := '-';
@@ -966,11 +958,6 @@ end;
 procedure ShutDown;
 begin
   ExitToMenu;
-
-  {$IFDEF MSWINDOWS}
-  if r_sleeptime.Value > 0 then
-    timeEndPeriod(r_sleeptime.Value);
-  {$ENDIF}
 
   if AbnormalTerminate then
     Exit;

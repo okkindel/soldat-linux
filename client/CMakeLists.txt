@@ -3,27 +3,6 @@ find_package(OpenAL REQUIRED)
 find_package(Freetype REQUIRED)
 add_subdirectory(libs/stb)
 
-if(APPLE)
-  add_flag_append(CMAKE_Pascal_FLAGS "-Fl/usr/local/lib")
-  # add_flag_append(CMAKE_Pascal_FLAGS "-Fu./macOS/Frameworks")
-  # add_flag_append(CMAKE_Pascal_FLAGS "-Fl./macOS/Frameworks")
-  # add_flag_append(CMAKE_Pascal_FLAGS "-Fu./macOS/Frameworks")
-  # add_flag_append(CMAKE_Pascal_FLAGS "-k-FmacOS/Frameworks")
-  add_flag_append(CMAKE_Pascal_FLAGS "-k\"-framework\" -k\"OpenAL\"")
-  add_flag_append(CMAKE_Pascal_FLAGS "-k\"-framework\" -k\"OpenGL\"")
-  add_flag_append(CMAKE_Pascal_FLAGS "-k\"-rpath\" -k\"@executable_path\"")
-  # add_flag_append(CMAKE_Pascal_FLAGS "-k\"-rpath\"
-  # -k\"@executable_path/../Frameworks\"")
-  add_flag_append(CMAKE_Pascal_FLAGS "-dOPENGL_FRAMEWORK")
-  # set the correct library or framework style depending on the main SDL
-  string(FIND "${SDL2_LIBRARY}" "dylib" sdl_framework)
-  if(${sdl_framework} GREATER -1)
-    add_flag_append(CMAKE_Pascal_FLAGS "-k-lsdl2")
-  else()
-    add_flag_append(CMAKE_Pascal_FLAGS "-k-framework -kSDL2")
-  endif()
-endif()
-
 # Include unit search paths
 add_flag_prepend(CMAKE_Pascal_FLAGS "-Fl${CMAKE_SOURCE_DIR}/client/libs")
 add_flag_prepend(CMAKE_Pascal_FLAGS "-Fu${CMAKE_SOURCE_DIR}/client/libs")

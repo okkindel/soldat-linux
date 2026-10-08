@@ -8,10 +8,6 @@ option(BUILD_STEAM "Build steam version" False)
 option(BUILD_GNS "Build GameNetworkingSockets" True)
 option(CROSS_LINUX_64 "Cross compile to Linux 64bit" False)
 option(CROSS_LINUX_32 "Cross compile to Linux 32bit" False)
-option(CROSS_WINDOWS_64 "Cross compile to Windows x86_64" False)
-option(CROSS_WINDOWS_32 "Cross compile to Windows i386" False)
-option(CROSS_DARWIN_64 "Cross compile to macOS x86_64" False)
-option(CROSS_DARWIN_32 "Cross compile to macOS i386" False)
 
 option(ADD_BFT "Copy BFT test to scripts directory" False)
 option(ADD_FFI_FUZZ "Enable ScriptCore FFI fuzz tests" False)
@@ -31,50 +27,27 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# On Unices other than Mac, use GNUInstallDirs for an easier packaging process.
-if (UNIX AND NOT APPLE)
-  include(GNUInstallDirs)
-  set(target_full_library_install_dir "${CMAKE_INSTALL_FULL_LIBDIR}")
-  set(target_library_install_dir "${CMAKE_INSTALL_LIBDIR}")
-  set(target_full_binary_install_dir "${CMAKE_INSTALL_FULL_BINDIR}")
-  set(target_binary_install_dir "${CMAKE_INSTALL_BINDIR}")
-  set(target_full_data_install_dir "${CMAKE_INSTALL_FULL_DATADIR}")
-  set(target_data_install_dir "${CMAKE_INSTALL_DATADIR}")
-else()
-  set(target_full_library_install_dir "${CMAKE_INSTALL_PREFIX}")
-  set(target_library_install_dir ".")
-  set(target_full_binary_install_dir "${CMAKE_INSTALL_PREFIX}")
-  set(target_binary_install_dir ".")
-  set(target_full_data_install_dir "${CMAKE_INSTALL_PREFIX}")
-  set(target_data_install_dir ".")
-endif()
+# Use GNUInstallDirs for an easier packaging process.
+include(GNUInstallDirs)
+set(target_full_library_install_dir "${CMAKE_INSTALL_FULL_LIBDIR}")
+set(target_library_install_dir "${CMAKE_INSTALL_LIBDIR}")
+set(target_full_binary_install_dir "${CMAKE_INSTALL_FULL_BINDIR}")
+set(target_binary_install_dir "${CMAKE_INSTALL_BINDIR}")
+set(target_full_data_install_dir "${CMAKE_INSTALL_FULL_DATADIR}")
+set(target_data_install_dir "${CMAKE_INSTALL_DATADIR}")
 
 #set(CMAKE_VERBOSE_MAKEFILE on)
 
 # RPATH settings. This needs to be set before executing
 # enable_language(Pascal). Those settings will make sure
-# our binaries can find dynamic libraries. It's only necessary
-# on UNIX, will be ignored elsewhere.
-if(UNIX)
-  if(APPLE)
-    set(target_full_library_install_dir "${CMAKE_INSTALL_PREFIX}/../Frameworks/")
-    set(target_library_install_dir "../Frameworks/")
-    #set(CMAKE_INSTALL_PREFIX "Soldat.app/Contents/MacOS/")
-    set(CMAKE_INSTALL_RPATH "@executable_path/../Frameworks")
-    set(CMAKE_BUILD_WITH_INSTALL_NAME_DIR TRUE)
-    set(CMAKE_INSTALL_NAME_DIR "@executable_path/../Frameworks")
-    set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
-  else()
-    set(CMAKE_INSTALL_RPATH
-      "$ORIGIN/../${target_library_install_dir}/:$ORIGIN/:${target_full_library_install_dir}"
-    )
-    set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
-  endif()
-
-  set(CMAKE_SKIP_BUILD_RPATH FALSE)
-  set(CMAKE_SKIP_INSTALL_RPATH FALSE)
-  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
-endif()
+# our binaries can find dynamic libraries.
+set(CMAKE_INSTALL_RPATH
+  "$ORIGIN/../${target_library_install_dir}/:$ORIGIN/:${target_full_library_install_dir}"
+)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+set(CMAKE_SKIP_BUILD_RPATH FALSE)
+set(CMAKE_SKIP_INSTALL_RPATH FALSE)
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 
 # As of my understanding, this should execute CMakePascalInformation.cmake,
 # which sets CMake variables to enable integration with fpc.
@@ -128,21 +101,6 @@ if(CROSS_LINUX_32)
   add_flag_prepend(CMAKE_Pascal_FLAGS "-Tlinux -Pi386")
 endif()
 
-if(CROSS_WINDOWS_64)
-  add_flag_prepend(CMAKE_Pascal_FLAGS "-Twin64 -Px86_64")
-endif()
-
-if(CROSS_WINDOWS_32)
-  add_flag_prepend(CMAKE_Pascal_FLAGS "-Twin32 -Pi386")
-endif()
-
-if(CROSS_DARWIN_64)
-  add_flag_prepend(CMAKE_Pascal_FLAGS "-Tdarwin -Px86_64")
-endif()
-
-if(CROSS_DARWIN_32)
-  add_flag_prepend(CMAKE_Pascal_FLAGS "-Tdarwin -Pi386")
-endif()
 
 if(BUILD_STEAM)
   add_flag_prepend(CMAKE_Pascal_FLAGS "-dSTEAM")
@@ -159,10 +117,9 @@ if(ADD_ASSETS)
   download_assets()
 endif()
 
-# The official 1.7 build exists only for Linux x86_64
-if(ADD_LEGACY_CLIENT AND BUILD_CLIENT AND UNIX AND NOT APPLE
-   AND CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64"
-   AND NOT CROSS_WINDOWS_64 AND NOT CROSS_WINDOWS_32 AND NOT CROSS_LINUX_32)
+# The official 1.7 build exists only for x86_64
+if(ADD_LEGACY_CLIENT AND BUILD_CLIENT
+   AND CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64" AND NOT CROSS_LINUX_32)
   include(${CMAKE_MODULE_PATH}/SoldatLegacyClient.cmake)
   download_legacy_client()
   set(LEGACY_CLIENT_ENABLED True)
@@ -182,6 +139,19 @@ endif()
 
 if(BUILD_CLIENT)
   add_subdirectory(client)
+
+  # "make deb" builds an installable Debian/Ubuntu/Mint package
+  if(ADD_ASSETS)
+    file(READ ${CMAKE_SOURCE_DIR}/shared/Version.txt SOLDAT_VERSION_STRING)
+    string(REGEX REPLACE "['\n\r ]" "" SOLDAT_VERSION_STRING "${SOLDAT_VERSION_STRING}")
+    add_custom_target(deb
+      # the package contains this client and the Soldat 1.7.1 client
+      COMMAND sh ${CMAKE_SOURCE_DIR}/packaging/linux/build-deb.sh
+              ${EXECUTABLE_OUTPUT_PATH} ${CMAKE_BINARY_DIR} ${SOLDAT_VERSION_STRING}+1.7.1
+      DEPENDS soldat
+      COMMENT "Building Debian package"
+    )
+  endif()
 endif()
 
 if(BUILD_SERVER)
@@ -208,9 +178,7 @@ install(
   PATTERN "*.bat" EXCLUDE
   PATTERN "*.res" EXCLUDE
   PATTERN "*.smod" EXCLUDE
-  PATTERN "*.dll"
   PATTERN "*.so"
-  PATTERN "*.dylib"
   # Ignore subdirectories, just in case... it's not necessary on clean build,
   # only if you ran client/server executables before installing.
   REGEX "configs|demos|logs|maps|mods|screens|scripts" EXCLUDE

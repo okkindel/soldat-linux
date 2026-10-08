@@ -102,11 +102,7 @@ function ReadINI(FileName, Section, Value, Default: string): string;
 implementation
 
 uses
-  {$IFNDEF MSWINDOWS}
-    Unix,
-  {$ELSE}
-    ShellApi,
-  {$ENDIF}
+  Unix,
   Net, NetworkUtils, NetworkServerFunctions, NetworkServerThing,
   NetworkServerMessages, NetworkServerGame,
   Server, Game, Calc, IniFiles, Sprites, fpmasks,
@@ -770,19 +766,7 @@ end;
 
 function GetSystem: String;
 begin
-  {$IFDEF MSWINDOWS}
-  Result := 'windows';
-    {$ELSE}
-        {$IFDEF LINUX}
-        Result := 'linux';
-        {$ELSE}
-            {$IFDEF DARWIN}
-            Result := 'osx';
-            {$ELSE}
-            Result := 'unknown';
-            {$ENDIF}
-        {$ENDIF}
-    {$ENDIF}
+  Result := 'linux';
 end;
 
 function GetPlayerStat(Id: Byte; ScriptStat: String): Variant;
@@ -1070,14 +1054,7 @@ begin
       DEBUG_MESSAGE_COLOR);
     Exit;
   end;
-  {$IFNDEF MSWINDOWS}
-    Result := fpSystem(Command);
-  {$ELSE}
-  Result := ShellExecute(0, 'open',
-      // PChar('command.com'),  // doesn't work on Window 64bit
-      PChar('cmd.exe'),  // Since Windows NT
-      PChar('/c ' + Command), nil, 0)
-  {$ENDIF}
+  Result := fpSystem(Command);
 end;
 
 function MyReadFile(FileName: String): String;

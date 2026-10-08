@@ -412,7 +412,7 @@ begin
     Shown := Text;
 
   if (Shown = '') and not Focused then
-    DrawText(Placeholder, x + 8, y, Color(C_TEXT_DIM, 160), 16, h)
+    DrawText(FitText(Placeholder, w - 16), x + 8, y, Color(C_TEXT_DIM, 160), 16, h)
   else
   begin
     SetFont(16);
@@ -761,16 +761,22 @@ end;
 
 // Starts the Soldat 1.7 client configured in cl_legacy_client, which speaks
 // the protocol of the servers this client can't join.
-// cl_legacy_client, or the client shipped next to the game in legacy/.
+// cl_legacy_client, or the client in legacy/ of the user directory (copied
+// there by the installed launcher, it needs to write next to itself) or of
+// the game directory.
 function LegacyClientPath: string;
 begin
   Result := Trim(cl_legacy_client.Value);
-  if Result = '' then
-  begin
-    Result := BaseDirectory + 'legacy/soldat_x64';
-    if not FileExists(Result) then
-      Result := '';
-  end;
+  if Result <> '' then
+    Exit;
+
+  Result := UserDirectory + 'legacy/soldat_x64';
+  if FileExists(Result) then
+    Exit;
+
+  Result := BaseDirectory + 'legacy/soldat_x64';
+  if not FileExists(Result) then
+    Result := '';
 end;
 
 // Copies the player and display settings of this menu into the config of
@@ -2079,7 +2085,8 @@ begin
   // header
   FillRect(-OffsetX / Scale, 0, DrawW / Scale, 72, Color($0B0D08, 200));
   FillRect(-OffsetX / Scale, 72, DrawW / Scale, 1, Color(C_PANEL_LINE));
-  DrawText('SOLDAT', 40, 0, Color(C_ACCENT), 34, 72, True);
+  DrawText('SOLDAT', 40, -8, Color(C_ACCENT), 34, 72, True);
+  DrawText('okkindel remix', 42, 50, Color(C_TEXT_DIM), 13, 16);
 
   x := 280;
   if TabButton(_('Servers'), x, 14, 150, 58, Tab = tabServers) then

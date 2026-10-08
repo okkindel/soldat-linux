@@ -11,11 +11,7 @@ unit Main;
 interface
 
 uses
-  {$IFDEF MSWINDOWS}
-  Windows,
-  {$ELSE}
   Baseunix,
-  {$ENDIF}
 
   {$IFDEF SCRIPT}ScriptDispatcher,{$ENDIF}
 
@@ -28,42 +24,6 @@ implementation
 var
   CtrlCHit: Boolean = False;
 
-{$IFDEF MSWINDOWS}
-// The windows server needs a hook to make soldatserver exit normally
-function ConsoleHandlerRoutine(CtrlType: DWORD): BOOL; stdcall;
-begin
-  Result := False;
-  if CtrlType = CTRL_C_EVENT then
-  begin
-    Result := True;
-    if not CtrlCHit then
-    begin
-      ProgReady := False;
-      CtrlCHit := True;
-      WriteLn('Control-C hit, shutting down');
-    end
-    else
-    begin
-      WriteLn('OK, OK, exiting immediately');
-      Halt(1);
-    end;
-  end;
-end;
-
-procedure SetSigHooks;
-begin
-  SetConsoleCtrlHandler(@ConsoleHandlerRoutine, True);
-end;
-
-procedure ClearSigHooks;
-begin
-  // for some reason, under windows if we caught CTRL+C, it kept looping
-  // My guess is that there are some threads that aren't cleaned up and
-  // windows is waiting for them, so for now we just quit again
-  SetConsoleCtrlHandler(@ConsoleHandlerRoutine, False);
-  GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
-end;
-{$ELSE}
 // The linux server can be killed with
 // 'kill -TERM(15) <pid>' or 'kill -QUIT(3) <pid>' and
 // it will clean itself up, instead of forcing you to use 'KILL -KILL(9) <pid>'
@@ -114,9 +74,7 @@ begin
   FSIGTERM^.sa_Handler := SigActionHandler(@HandleSig);
   FSIGTERM^.Sa_Flags := 0;
 
-  {$IFDEF Linux}  // Linux specific
   FSIGTERM^.Sa_Restorer := nil;
-  {$ENDIF}
 
   if fpSigAction(SIGTERM, FSIGTERM, FSIGTERMOLD) <> 0 then
     raise Exception.Create('SIGAction failed');
@@ -131,9 +89,7 @@ begin
   FSIGINT^.sa_Handler := SigActionHandler(@HandleSig);
   FSIGINT^.Sa_Flags := 0;
 
-  {$IFDEF Linux}  // Linux specific
   FSIGINT^.Sa_Restorer := nil;
-  {$ENDIF}
 
   if fpSigAction(SIGINT, FSIGINT, FSIGINTOLD) <> 0 then
     raise Exception.Create('SIGAction failed');
@@ -148,9 +104,7 @@ begin
   FSIGQUIT^.sa_Handler := SigActionHandler(@HandleSig);
   FSIGQUIT^.Sa_Flags := 0;
 
-  {$IFDEF Linux}  // Linux specific
   FSIGQUIT^.Sa_Restorer := nil;
-  {$ENDIF}
 
   if fpSigAction(SIGQUIT, FSIGQUIT, FSIGQUITOLD) <> 0 then
     raise Exception.Create('SIGAction failed');
@@ -165,9 +119,7 @@ begin
   FSIGPIPE^.sa_Handler := SigActionHandler(@HandleSig);
   FSIGPIPE^.Sa_Flags := 0;
 
-  {$IFDEF Linux}  // Linux specific
   FSIGPIPEOLD^.Sa_Restorer := nil;
-  {$ENDIF}
 
   if fpSigAction(SIGPIPE, FSIGPIPE, FSIGPIPEOLD) <> 0 then
     raise Exception.Create('SIGAction failed');
@@ -187,15 +139,10 @@ begin
   if fpSigAction(SIGPIPE,  FSIGPIPEOLD, nil) <> 0 then
     raise Exception.Create('SIGAction failed');
 end;
-{$ENDIF}
 
 function IsRoot: Boolean;
 begin
-  {$IFDEF MSWINDOWS}
-  Result := False;  // Ignore for Windows users
-  {$ELSE}
   Result := (FpGeteuid() = 0);
-  {$ENDIF}
 end;
 
 procedure RunServer;

@@ -294,7 +294,6 @@ implementation
 
 uses
   SysUtils, Math, dglOpenGL,
-  {$IFDEF MSWINDOWS}Windows, {$ENDIF}
   BinPack, stb, FreeType, SDL2, Input, PhysFS;
 
 {******************************************************************************}

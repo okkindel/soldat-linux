@@ -18,11 +18,7 @@ var
 begin
   UpdaterProcess := TProcess.Create(nil);
   try
-    {$IFDEF WINDOWS}
-    UpdaterProcess.Executable := ExtractFilePath(ParamStr(0)) + 'solupd.exe';
-    {$ELSE}
     UpdaterProcess.Executable := ExtractFilePath(ParamStr(0)) + 'solupd';
-    {$ENDIF}
     UpdaterProcess.CurrentDirectory := ExtractFilePath(ParamStr(0));
     UpdaterProcess.Parameters.Add('--waitpid');
     UpdaterProcess.Parameters.Add(IntToStr(System.GetProcessID));

@@ -78,9 +78,6 @@ var
 begin
   try
     inherited Create(False);  // Create thread suspended
-      {$IFDEF MSWINDOWS}
-      Priority := TThreadPriority(tpNormal);  // Set Priority Level
-      {$ENDIF}
     FreeOnTerminate := True;  // Thread Free Itself when terminated
 
     FFuncName := FuncName;

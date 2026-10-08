@@ -1,12 +1,3 @@
-if(APPLE)
-  add_flag_append(CMAKE_Pascal_FLAGS "-Fl/usr/local/lib")
-  add_flag_append(CMAKE_Pascal_FLAGS "-Fu./macOS/Frameworks")
-  add_flag_append(CMAKE_Pascal_FLAGS "-Fl./macOS/Frameworks")
-  add_flag_append(CMAKE_Pascal_FLAGS "-Fu./macOS/Frameworks")
-  add_flag_append(CMAKE_Pascal_FLAGS "-k-FmacOS/Frameworks")
-  add_flag_append(CMAKE_Pascal_FLAGS "-k\"-rpath\" -k\"@executable_path\"")
-endif()
-
 add_flag_prepend(CMAKE_Pascal_FLAGS "-Fu${CMAKE_SOURCE_DIR}/server")
 add_flag_prepend(CMAKE_Pascal_FLAGS "-Fu${CMAKE_SOURCE_DIR}/server/scriptcore")
 add_flag_prepend(CMAKE_Pascal_FLAGS

@@ -428,20 +428,11 @@ var
 begin
   // Resolve file path
   case FilePath[1] of
-    {$IFDEF UNIX}
     '/': FilePath := ExpandFileName(FilePath);
-    {$ENDIF}
     '~': FilePath := ExpandFileName(Self.DataFolder +
         Copy(FilePath, 3, Length(FilePath)));
     else
     begin
-      {$IFDEF MSWINDOWS}
-      if (FilePath[1] in ['A'..'Z'])
-          and ((Copy(FilePath, 2, 2) = ':\')
-          or (Copy(FilePath, 2, 2) = ':/')) then
-        FilePath := ExpandFileName(FilePath)
-      else
-      {$ENDIF}
       FilePath := ExpandFileName(UserDirectory + FilePath);
     end;
   end;

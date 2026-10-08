@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Soldat
+GenericName=2D action shooter
+Comment=Fast-paced 2D side-view multiplayer shooter
+Exec=soldat
+Icon=soldat
+Terminal=false
+Categories=Game;ActionGame;

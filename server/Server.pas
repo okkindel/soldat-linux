@@ -13,9 +13,7 @@ interface
 uses
   // system and delphi units
   SysUtils, Classes, Variants,
-  {$IFNDEF MSWINDOWS}
   Baseunix,
-  {$ENDIF}
 
   // helper units
   Vector, Util, Sha1,
@@ -303,7 +301,6 @@ uses
   Weapons, TraceLog;
 
 
-{$IFNDEF MSWINDOWS}
 // from lazdaemon package
 // BUG: "Old instance (the parent) writes it's consolelog
 // no idea how to avoid it. Perhaps somebody who knows this code could fix it.
@@ -339,7 +336,6 @@ begin
     ErrOutput := devnull;
   end;
 end;
-{$ENDIF}
 
 {$IFDEF STEAM}
 {$IFDEF STEAMSTATS}
