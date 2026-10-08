@@ -53,9 +53,9 @@ const
     'r_renderbackground', 'r_scaleinterface'
   );
 
-  OPTION_CVARS: array[0..4] of AnsiString = (
+  OPTION_CVARS: array[0..5] of AnsiString = (
     'snd_volume', 'snd_effects_battle', 'snd_effects_explosions', 'cl_sensitivity',
-    'cl_mapvote_key'
+    'cl_mapvote_key', 'cl_update_check'
   );
 
   LEGACY_VERSION = '1.7.1';
@@ -89,7 +89,7 @@ const
 
 type
   TMenuTab = (tabServers, tabPlayer, tabMaps, tabSettings);
-  TSettingsPage = (spGraphics, spAudio, spControls);
+  TSettingsPage = (spGraphics, spAudio, spControls, spGeneral);
 
   TSortColumn = (scName, scMode, scMap, scPlayers, scPing, scVersion, scCountry);
 
@@ -1412,7 +1412,7 @@ const
   LIST_X = 40;
   LIST_Y = 200;
   LIST_W = 920;
-  LIST_H = 392;
+  LIST_H = 420;
   FULL_W = 1200; // list and players panel
   HEADER_H = 30;
   FILTER_Y = 142;
@@ -1751,20 +1751,6 @@ begin
 
   if Button(_('Connect'), LIST_X + FULL_W - 260, y, 260, 38, True, AddressText <> '') then
     JoinAddress;
-
-  // client used for servers with the old protocol
-  y := y + 46;
-  DrawText(_('Soldat 1.7 client'), LIST_X, y, Color(C_TEXT_DIM), 15, 28);
-  TextField(ID_LEGACY, LegacyText, LIST_X + 160, y, 750, 28, 1024,
-    Choose(LegacyClientPath <> '', WideString(LegacyClientPath),
-      _('Path to soldat_x64 (used for 1.7 servers)')));
-  if UTF8Encode(LegacyText) <> cl_legacy_client.Value then
-  begin
-    cl_legacy_client.SetValue(UTF8Encode(LegacyText));
-    PlayerDirty := True;
-  end;
-  if (LegacyText <> '') and not FileExists(UTF8Encode(LegacyText)) then
-    DrawText(_('File not found'), LIST_X + 925, y, Color(C_ERROR), 15, 28);
 end;
 
 {******************************************************************************}
@@ -3359,6 +3345,49 @@ begin
   SwitchSettingsPage(SettingsPage);
 end;
 
+procedure DrawGeneralSettings;
+const
+  GX = 240;
+  GW = 800;
+var
+  Items: array of WideString;
+  Value: Boolean;
+begin
+  FillRect(GX - 30, 90, GW + 60, 250, Color(C_PANEL, 230));
+  StrokeRect(GX - 30, 90, GW + 60, 250, Color(C_PANEL_LINE));
+
+  DrawText(_('Soldat 1.7.1 client'), GX, 100, Color(C_ACCENT), 20, 30, True);
+  FillRect(GX, 132, GW, 1, Color(C_PANEL_LINE));
+  TextField(ID_LEGACY, LegacyText, GX, 144, GW, 32, 1024,
+    Choose(LegacyClientPath <> '', WideString(LegacyClientPath),
+      _('Downloaded on first use of a 1.7.1 server')));
+  if UTF8Encode(LegacyText) <> cl_legacy_client.Value then
+  begin
+    cl_legacy_client.SetValue(UTF8Encode(LegacyText));
+    PlayerDirty := True;
+  end;
+  if (LegacyText <> '') and not FileExists(UTF8Encode(LegacyText)) then
+    DrawText(_('File not found'), GX, 180, Color(C_ERROR), 14, 24)
+  else
+    DrawText(_('Path to soldat_x64, empty for the downloaded client.'), GX, 180,
+      Color(C_TEXT_DIM), 14, 24);
+
+  DrawText(_('Updates'), GX, 220, Color(C_ACCENT), 20, 30, True);
+  FillRect(GX, 252, GW, 1, Color(C_PANEL_LINE));
+  SetLength(Items, 2);
+  Items[0] := _('Off');
+  Items[1] := _('On');
+  Value := Selector(_('Check for updates'), Items, Ord(cl_update_check.Value), GX, 264, GW) = 1;
+  if Value <> cl_update_check.Value then
+  begin
+    cl_update_check.SetValue(Value);
+    OptionsDirty := True;
+    SaveSettings;
+  end;
+  DrawText(_('Asks GitHub for the latest release when the game starts.'), GX, 300,
+    Color(C_TEXT_DIM), 14, 24);
+end;
+
 procedure DrawSettingsTab;
 const
   NAV_X = 40;
@@ -3387,11 +3416,13 @@ begin
   Page(_('Graphics'), spGraphics, 90);
   Page(_('Audio'), spAudio, 134);
   Page(_('Controls'), spControls, 178);
+  Page(_('General'), spGeneral, 222);
 
   case SettingsPage of
     spGraphics: DrawGraphicsTab;
     spAudio: DrawAudioTab;
     spControls: DrawControlsTab;
+    spGeneral: DrawGeneralSettings;
   end;
 end;
 

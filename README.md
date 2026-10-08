@@ -19,9 +19,10 @@ This fork is a version of opensoldat that you can build on Linux and that runs n
   - *Settings*:
     - *Graphics*: monitor, window mode, resolution, vsync, frame limit, texture and scaling filters. Changes apply without a restart, and the window can be resized in windowed mode.
     - *Audio*: volume, distant battle sounds and ear ringing near explosions.
-    - *Controls*: mouse sensitivity, key binds and the map vote key of the 1.7.1 client.
+    - *Controls*: mouse sensitivity, key binds and the map vote key.
+    - *General*: path of the Soldat 1.7.1 client and the update check.
 - **Change map** in the in-game menu (ESC, 2, or F10) lists all maps of the server at once, favorites first.
-- **Updates:** the menu shows when a newer release is out on GitHub (`cl_update_check 0` turns the check off).
+- **Updates:** the menu shows when a newer release is out on GitHub (can be turned off in *Settings, General*).
 - **Settings are saved** to `client.cfg` and used by both game clients.
 - **Soldat 1.8 and 1.7.1 servers** both work, see below.
 
@@ -46,7 +47,7 @@ Soldat 1.8 (this code) and Soldat 1.7.1 use different network protocols, so this
 5. **While the 1.7.1 client runs**, the menu shows only the server you play on, with *Back to game*, *Change map* and *Leave server*. Quitting the menu closes the game too.
 6. **Changing the map:** press **F10** (or the key set in *Settings, Controls*) in game, pick a map (favorites first) and it types `/votemap <map>` into the game.
 
-Limitations: the 1.7.1 client can't be told which monitor to use, so it opens where it decides. A custom 1.7.1 client path can be set in the field at the bottom of the *Servers* tab (saved as `cl_legacy_client`).
+Limitations: the 1.7.1 client can't be told which monitor to use, so it opens where it decides. A custom 1.7.1 client path can be set in *Settings, General* (saved as `cl_legacy_client`).
 
 ## Dependencies
 

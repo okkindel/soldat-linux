@@ -125,10 +125,10 @@ initialization
   Lock := TCriticalSection.Create;
 
 finalization
-  if Thread <> nil then
+  // quitting doesn't wait for a slow network, the process ends anyway
+  if (Thread <> nil) and Thread.Finished then
   begin
-    Thread.WaitFor;
     Thread.Free;
+    Lock.Free;
   end;
-  Lock.Free;
 end.
