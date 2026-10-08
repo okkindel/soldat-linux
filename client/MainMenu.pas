@@ -761,6 +761,19 @@ end;
 
 // Starts the Soldat 1.7 client configured in cl_legacy_client, which speaks
 // the protocol of the servers this client can't join.
+// Reaps the 1.7 client once it quit (TProcess.Running waits for it without
+// blocking, so it doesn't stay around as a zombie) and reports a crash.
+procedure CheckLegacyProcess;
+begin
+  if (LegacyProcess = nil) or LegacyProcess.Running then
+    Exit;
+
+  if LegacyProcess.ExitStatus <> 0 then
+    MenuStatus := WideFormat(_('The Soldat 1.7 client quit with an error (%d). Try joining again.'),
+      [LegacyProcess.ExitCode]);
+  FreeAndNil(LegacyProcess);
+end;
+
 // cl_legacy_client, or the client in legacy/ of the user directory (copied
 // there by the installed launcher, it needs to write next to itself) or of
 // the game directory.
@@ -2180,6 +2193,7 @@ begin
     end;
 
     HandleListKeys;
+    CheckLegacyProcess;
     RenderMenu;
 
     // there is nothing to simulate here, so don't burn the CPU
