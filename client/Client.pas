@@ -47,6 +47,12 @@ uses
 
 procedure JoinServer;
 procedure StartGame;
+procedure RunClient;
+procedure RequestJoin;
+procedure RequestQuit;
+procedure ApplyVideoSettings;
+function VideoDisplayIndex: Integer;
+procedure HandleWindowResized(w, h: Integer);
 procedure ShutDown;
 procedure ExitToMenu;
 procedure RestartGraph;
@@ -64,6 +70,13 @@ type
 var
   GameLoopRun: Boolean;
   ProgReady: Boolean;
+
+  // main menu state
+  PendingJoin: Boolean = False; // JoinIP/JoinPort are set, join when back in the menu loop
+  QuitRequested: Boolean = False;
+  GameStarted: Boolean = False;
+  MenuStatus: WideString = ''; // last connection status, shown in the main menu
+  WindowResized: Boolean = False; // window size changed by the player, not saved yet
 
   JoinPassword: String; // server password
   JoinPort: String; // join port to server
@@ -91,6 +104,7 @@ var
   fs_userpath: TStringCvar;
 
   r_fullscreen: TIntegerCvar;
+  r_display: TIntegerCvar;
   r_weathereffects: TBooleanCvar;
   r_dithering: TBooleanCvar;
   r_swapeffect: TIntegerCvar;
@@ -163,6 +177,8 @@ var
 
   cl_runs: TIntegerCvar;
   cl_lang: TStringCvar;
+  cl_lobbyurl: TStringCvar;
+  cl_legacy_client: TStringCvar;
 
   demo_speed: TSingleCvar;
   demo_rate: TIntegerCvar;
@@ -307,7 +323,7 @@ var
 implementation
 
 uses
-  IniFiles, TraceLog, ClientGame, ControlGame, InterfaceGraphics, Input;
+  IniFiles, TraceLog, ClientGame, ControlGame, InterfaceGraphics, Input, MainMenu;
 
 procedure RestartGraph;
 begin
@@ -382,7 +398,8 @@ begin
   begin
     JoinIP := RedirectIP;
     JoinPort := IntToStr(RedirectPort);
-    JoinServer();
+    JoinPassword := '';
+    RequestJoin;
   end else
   begin
     RedirectIP := '';
@@ -469,6 +486,9 @@ begin
   CameraFollowSprite := 0;
   GameThingTarget := 0;
 
+  // go back to the main menu
+  GameLoopRun := False;
+
   if RedirectToServer then
     RedirectDialog;
 end;
@@ -548,7 +568,7 @@ begin
         if ForceReconnect then
         begin
           ExitToMenu();
-          JoinServer;
+          RequestJoin;
           ForceReconnect := False;
         end;
       end;
@@ -565,11 +585,120 @@ end;
 
 {$ENDIF}
 
+// The monitor selected with r_display, if it is still connected.
+function VideoDisplayIndex: Integer;
+begin
+  Result := Max(0, Min(r_display.Value, SDL_GetNumVideoDisplays() - 1));
+end;
+
+// Computes window, render and game sizes plus interface scale factors from
+// the r_* cvars. Called on startup and whenever video settings are applied.
+procedure UpdateScreenMetrics;
+var
+  fov: Single;
+  currentDisplay: TSDL_DisplayMode;
+begin
+  // these might change so keep a backup to avoid changing the settings file
+  ScreenWidth := r_screenwidth.Value;
+  ScreenHeight := r_screenheight.Value;
+  RenderHeight := r_renderheight.Value;
+  RenderWidth := r_renderwidth.Value;
+
+  SDL_GetDesktopDisplayMode(VideoDisplayIndex, @currentDisplay);
+
+  if (ScreenWidth = 0) or (ScreenHeight = 0) then
+  begin
+    ScreenWidth := currentDisplay.w;
+    ScreenHeight := currentDisplay.h;
+  end;
+
+  if (RenderWidth = 0) or (RenderHeight = 0) then
+  begin
+    RenderWidth := ScreenWidth;
+    RenderHeight := ScreenHeight;
+  end;
+
+  // Calculcate FOV to check for too high/low vision
+  fov := RenderWidth / RenderHeight;
+  if fov > MAX_FOV then
+  begin
+    RenderWidth := Ceil(RenderHeight * MAX_FOV);
+    fov := MAX_FOV;
+  end
+  else if fov < MIN_FOV then
+  begin
+    RenderHeight := Ceil(RenderWidth / MIN_FOV);
+    fov := MIN_FOV;
+  end;
+
+  // Calulcate internal game width based on the fov and internal height
+  GameWidth := Round(fov * GameHeight);
+  GameWidthHalf := GameWidth / 2;
+  GameHeightHalf := GameHeight / 2;
+
+  if r_fullscreen.Value = 0 then
+  begin
+    // avoid black bars in windowed mode
+    if (ScreenWidth / ScreenHeight) >= (RenderWidth / RenderHeight) then
+      ScreenWidth := Round(ScreenHeight * (RenderWidth / RenderHeight))
+    else
+      ScreenHeight := Round(ScreenWidth * (RenderHeight / RenderWidth));
+  end;
+
+  // window size equals "screen" size except in windowed fullscreen
+  WindowWidth := ScreenWidth;
+  WindowHeight := ScreenHeight;
+
+  if r_fullscreen.Value = 2 then
+  begin
+  //  WindowWidth := Screen.Width;
+  //  WindowHeight := Screen.Height;
+  end;
+
+  GfxLog(Format('Window size: %dx%d', [WindowWidth, WindowHeight]));
+  GfxLog(Format('Target resolution: %dx%d', [ScreenWidth, ScreenHeight]));
+  GfxLog(Format('Internal resolution: %dx%d', [RenderWidth, RenderHeight]));
+
+  // even windowed mode can behave as fullscreen with the right size
+  //IsFullscreen := (WindowWidth = Screen.Width) and (WindowHeight = Screen.Height);
+
+  // interface is hard-coded to work on 4:3 aspect ratio,
+  // but luckily for us the interface rendering code
+  // translates the points using _RScala scale factor
+  // above, so all we really need to do to make interace
+  // work for widescreens is translate those points to a wider
+  // area, which we can do by using the 640/480 as scale factors
+  // even in widescreen resolutions. The interface code does NOT
+  // use the _RScala to scale the interface, so this won't make
+  // it look distorted.
+  if r_scaleinterface.Value then
+  begin
+    _RScala.x := 1;
+    _RScala.y := 1;
+
+    _iscala.x := GameWidth / DEFAULT_WIDTH;
+    _iscala.y := 1;
+
+    fragx := floor(GameWidthHalf - 300) - 25;
+  end
+  else
+  begin
+    _RScala.x := RenderWidth / GameWidth;
+    _RScala.y := RenderHeight / GameHeight;
+
+    _iscala.x := RenderWidth / 640;
+    _iscala.y := RenderHeight / 480;
+
+    fragx := floor(RenderWidth / 2 - 300) - 25;
+
+    if RenderHeight > GameHeight then
+      fragy := Round(10 * _rscala.y);
+  end;
+end;
+
 procedure StartGame();
 var
   ini: TMemINIFile;
-  fov: Single;
-  currentDisplay: TSDL_DisplayMode;
   SystemLang: String = 'en_US';
   SystemFallbackLang: String = 'en_US';
   RadioMenuStream: TStream;
@@ -716,103 +845,8 @@ begin
 
   CvarsInitialized := True;
 
-  // these might change so keep a backup to avoid changing the settings file
-  ScreenWidth := r_screenwidth.Value;
-  ScreenHeight := r_screenheight.Value;
-  RenderHeight := r_renderheight.Value;
-  RenderWidth := r_renderwidth.Value;
-
   SDL_Init(SDL_INIT_VIDEO);
-  SDL_GetCurrentDisplayMode(0, @currentDisplay);
-
-  if (ScreenWidth = 0) or (ScreenHeight = 0) then
-  begin
-    ScreenWidth := currentDisplay.w;
-    ScreenHeight := currentDisplay.h;
-  end;
-
-  if (RenderWidth = 0) or (RenderHeight = 0) then
-  begin
-    RenderWidth := ScreenWidth;
-    RenderHeight := ScreenHeight;
-  end;
-
-  // Calculcate FOV to check for too high/low vision
-  fov := RenderWidth / RenderHeight;
-  if fov > MAX_FOV then
-  begin
-    RenderWidth := Ceil(RenderHeight * MAX_FOV);
-    fov := MAX_FOV;
-  end
-  else if fov < MIN_FOV then
-  begin
-    RenderHeight := Ceil(RenderWidth / MIN_FOV);
-    fov := MIN_FOV;
-  end;
-
-  // Calulcate internal game width based on the fov and internal height
-  GameWidth := Round(fov * GameHeight);
-  GameWidthHalf := GameWidth / 2;
-  GameHeightHalf := GameHeight / 2;
-
-  if r_fullscreen.Value = 0 then
-  begin
-    // avoid black bars in windowed mode
-    if (ScreenWidth / ScreenHeight) >= (RenderWidth / RenderHeight) then
-      ScreenWidth := Round(ScreenHeight * (RenderWidth / RenderHeight))
-    else
-      ScreenHeight := Round(ScreenWidth * (RenderHeight / RenderWidth));
-  end;
-
-  // window size equals "screen" size except in windowed fullscreen
-  WindowWidth := ScreenWidth;
-  WindowHeight := ScreenHeight;
-
-  if r_fullscreen.Value = 2 then
-  begin
-  //  WindowWidth := Screen.Width;
-  //  WindowHeight := Screen.Height;
-  end;
-
-  GfxLog(Format('Window size: %dx%d', [WindowWidth, WindowHeight]));
-  GfxLog(Format('Target resolution: %dx%d', [ScreenWidth, ScreenHeight]));
-  GfxLog(Format('Internal resolution: %dx%d', [RenderWidth, RenderHeight]));
-
-  // even windowed mode can behave as fullscreen with the right size
-  //IsFullscreen := (WindowWidth = Screen.Width) and (WindowHeight = Screen.Height);
-
-  // interface is hard-coded to work on 4:3 aspect ratio,
-  // but luckily for us the interface rendering code
-  // translates the points using _RScala scale factor
-  // above, so all we really need to do to make interace
-  // work for widescreens is translate those points to a wider
-  // area, which we can do by using the 640/480 as scale factors
-  // even in widescreen resolutions. The interface code does NOT
-  // use the _RScala to scale the interface, so this won't make
-  // it look distorted.
-  if r_scaleinterface.Value then
-  begin
-    _RScala.x := 1;
-    _RScala.y := 1;
-
-    _iscala.x := GameWidth / DEFAULT_WIDTH;
-    _iscala.y := 1;
-
-    fragx := floor(GameWidthHalf - 300) - 25;
-  end
-  else
-  begin
-    _RScala.x := RenderWidth / GameWidth;
-    _RScala.y := RenderHeight / GameHeight;
-
-    _iscala.x := RenderWidth / 640;
-    _iscala.y := RenderHeight / 480;
-
-    fragx := floor(RenderWidth / 2 - 300) - 25;
-
-    if RenderHeight > GameHeight then
-      fragy := Round(10 * _rscala.y);
-  end;
+  UpdateScreenMetrics;
 
   GameRenderingParams.InterfaceName := ui_style.Value;
 
@@ -925,6 +959,7 @@ begin
     cl_actionsnap.SetValue(False);
 
   WriteLogFile(GameLog, ConsoleLogFileName);
+  GameStarted := True;
   RunDeferredCommands();
 end;
 
@@ -983,8 +1018,25 @@ begin
   end;
 end;
 
+// Asks the main loop to (re)connect to JoinIP:JoinPort. Leaves the current
+// game loop, if any, instead of starting a nested one.
+procedure RequestJoin;
+begin
+  PendingJoin := True;
+  GameLoopRun := False;
+end;
+
+procedure RequestQuit;
+begin
+  QuitRequested := True;
+  GameLoopRun := False;
+end;
+
 procedure JoinServer();
 begin
+  PendingJoin := False;
+  MenuStatus := '';
+
   ResetFrameTiming;
 
   Inc(Initing);
@@ -993,10 +1045,20 @@ begin
 
   ServerIP := Trim(JoinIP);
   if not TryStrToInt(Trim(JoinPort), ServerPort) then
+  begin
+    MenuStatus := WideFormat(_('Invalid server port: %s'), [WideString(JoinPort)]);
     Exit;
+  end;
 
   InitGameGraphics();
   DoTextureLoading(True);
+
+  // the game uses relative mouse movement and draws its own cursor
+  StartInput();
+  mx := GameWidthHalf;
+  my := GameHeightHalf;
+  MousePrev.x := mx;
+  MousePrev.y := my;
 
   {$IFDEF ENABLE_FAE}
   // Fae performs various initialization tasks (compute HWID, checksum DLLs, etc.) in a separate
@@ -1007,7 +1069,10 @@ begin
   FaePreflight; // no-op if Fae if called before or if Fae is disabled
   {$ENDIF}
 
-  UDP := TClientNetwork.Create();
+  // the network object is kept for the whole session and reused between servers
+  if UDP = nil then
+    UDP := TClientNetwork.Create();
+
   // DEMO
   if JoinPort = '0' then
   begin
@@ -1035,6 +1100,112 @@ begin
       Exit;
     end;
   end;
+
+  // back from the game: make sure we are disconnected and the world is reset
+  ExitToMenu;
+end;
+
+// Applies r_fullscreen, r_screenwidth/height and r_swapeffect to the
+// existing window without restarting the game.
+procedure ApplyVideoSettings;
+var
+  Flags: LongWord;
+  Display: Integer;
+  Mode: TSDL_DisplayMode;
+begin
+  UpdateScreenMetrics;
+  Display := VideoDisplayIndex;
+
+  case r_fullscreen.Value of
+    1: Flags := SDL_WINDOW_FULLSCREEN;
+    2: Flags := SDL_WINDOW_FULLSCREEN_DESKTOP;
+  else
+    Flags := 0;
+  end;
+
+  // leave fullscreen first, so the window can move to another monitor
+  // and pick up the new size
+  SDL_SetWindowFullscreen(GameWindow, 0);
+  SDL_SetWindowSize(GameWindow, WindowWidth, WindowHeight);
+  SDL_SetWindowPosition(GameWindow, SDL_WINDOWPOS_CENTERED_DISPLAY(Display),
+    SDL_WINDOWPOS_CENTERED_DISPLAY(Display));
+
+  if Flags = SDL_WINDOW_FULLSCREEN then
+  begin
+    // exclusive fullscreen uses the display mode closest to the resolution
+    Mode := Default(TSDL_DisplayMode);
+    Mode.w := WindowWidth;
+    Mode.h := WindowHeight;
+    SDL_SetWindowDisplayMode(GameWindow, @Mode);
+  end;
+
+  if Flags <> 0 then
+    SDL_SetWindowFullscreen(GameWindow, Flags);
+
+  // the window can be resized freely in windowed mode
+  SDL_SetWindowResizable(GameWindow, TSDL_Bool(Flags = 0));
+
+  ResizeGameGraphics();
+
+  MainConsole.CountMax := Min(254, Round(ui_console_length.Value * _rscala.y));
+  BigConsole.CountMax := Min(254, Floor((0.85 * RenderHeight) /
+    (font_consolelineheight.Value * FontStyleSize(FONT_SMALL))));
+  KillConsole.CountMax := Round(ui_killconsole_length.Value * _rscala.y);
+
+  InitGameMenus();
+  ResetFrameTiming();
+end;
+
+// Called when the player resized the game window (windowed mode only).
+procedure HandleWindowResized(w, h: Integer);
+begin
+  if (r_fullscreen.Value <> 0) or (w <= 0) or (h <= 0) then
+    Exit;
+  if (w = WindowWidth) and (h = WindowHeight) then
+    Exit;
+
+  r_screenwidth.SetValue(w);
+  r_screenheight.SetValue(h);
+  WindowResized := True;
+
+  UpdateScreenMetrics;
+  // keep the real window size, the image gets letterboxed if the render
+  // size has a different aspect ratio
+  WindowWidth := w;
+  WindowHeight := h;
+
+  ResizeGameGraphics();
+
+  MainConsole.CountMax := Min(254, Round(ui_console_length.Value * _rscala.y));
+  BigConsole.CountMax := Min(254, Floor((0.85 * RenderHeight) /
+    (font_consolelineheight.Value * FontStyleSize(FONT_SMALL))));
+  KillConsole.CountMax := Round(ui_killconsole_length.Value * _rscala.y);
+
+  InitGameMenus();
+
+  mx := Min(mx, GameWidth);
+  my := Min(my, GameHeight);
+end;
+
+// Top level loop: shows the main menu and joins servers picked there (or
+// passed on the command line) until the player quits.
+procedure RunClient;
+begin
+  if not GameStarted then
+    Exit;
+
+  DoTextureLoading(True);
+
+  while not QuitRequested do
+  begin
+    if PendingJoin then
+      JoinServer
+    else
+      MainMenuLoop;
+  end;
+
+  // e.g. the window was resized in game and then closed
+  SaveSettings;
 end;
 
 procedure ShowMessage(MessageText: AnsiString); overload;

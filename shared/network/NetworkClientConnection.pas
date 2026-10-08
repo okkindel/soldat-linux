@@ -385,6 +385,9 @@ begin
   if not (DemoPlayer.Active and (DemoPlayer.SkipTo = -1)) then
     ShouldRenderFrames := True;
 
+  // we are in, loading messages are no longer interesting for the main menu
+  MenuStatus := '';
+
   if cl_player_team.Value > 0 then
     begin
       // Bypass Team Select Menu if team cvar is set

@@ -1172,6 +1172,11 @@ end;
 
 procedure GfxDeleteBuffer(var b: TGfxVertexBuffer);
 begin
+  // a new buffer can get the same address, which would make
+  // SetupVertexAttributes skip binding it
+  if GfxContext.BoundBuffer = b then
+    GfxContext.BoundBuffer := nil;
+
   FreeAndNil(b);
 end;
 

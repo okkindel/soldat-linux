@@ -1091,6 +1091,8 @@ begin
         if not ReceivedUnAccepted then
           RenderGameInfo('Network error: ' + WideString(pInfo.m_info.m_szEndDebug));
         NetworkingSockets.CloseConnection(pInfo.m_hConn, 0, nil, false);
+        // back to the main menu, which shows the error
+        GameLoopRun := False;
       end;
       k_ESteamNetworkingConnectionState_Connecting:
       begin

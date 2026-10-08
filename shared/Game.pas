@@ -559,7 +559,7 @@ begin
     else
     begin
       ExitToMenu;
-      JoinServer();
+      RequestJoin;
       Exit;
     end;
   {$ENDIF}

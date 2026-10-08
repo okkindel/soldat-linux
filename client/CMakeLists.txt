@@ -47,6 +47,10 @@ if(ADD_ASSETS)
   add_dependencies(soldat soldat_smod soldat_font)
 endif()
 
+if(LEGACY_CLIENT_ENABLED)
+  add_dependencies(soldat soldat_legacy_client)
+endif()
+
 if(UNIX)
   target_link_libraries(soldat stb)
 endif()

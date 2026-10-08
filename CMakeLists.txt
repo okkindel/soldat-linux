@@ -1,6 +1,7 @@
 project(soldat)
 
 option(ADD_ASSETS "Include soldat.smod and font file" True)
+option(ADD_LEGACY_CLIENT "Download the native Soldat 1.7 Linux client used for 1.7 servers" True)
 option(BUILD_CLIENT "Build client" True)
 option(BUILD_SERVER "Build server" True)
 option(BUILD_STEAM "Build steam version" False)
@@ -156,6 +157,15 @@ endif()
 if(ADD_ASSETS)
   include(${CMAKE_MODULE_PATH}/SoldatAssets.cmake)
   download_assets()
+endif()
+
+# The official 1.7 build exists only for Linux x86_64
+if(ADD_LEGACY_CLIENT AND BUILD_CLIENT AND UNIX AND NOT APPLE
+   AND CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64"
+   AND NOT CROSS_WINDOWS_64 AND NOT CROSS_WINDOWS_32 AND NOT CROSS_LINUX_32)
+  include(${CMAKE_MODULE_PATH}/SoldatLegacyClient.cmake)
+  download_legacy_client()
+  set(LEGACY_CLIENT_ENABLED True)
 endif()
 
 if(BUILD_CLIENT OR BUILD_SERVER)

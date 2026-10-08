@@ -703,10 +703,12 @@ begin
   while SDL_PollEvent(@Event) = 1 do
   begin
     case Event.type_ of
-      SDL_QUITEV: begin
-        ClientDisconnect;
-        Halt(0);
-      end;
+      SDL_QUITEV:
+        RequestQuit;
+
+      SDL_WINDOWEVENT:
+        if Event.window.event = SDL_WINDOWEVENT_SIZE_CHANGED then
+          HandleWindowResized(Event.window.data1, Event.window.data2);
 
       SDL_KEYDOWN: begin
         if not KeyDown(Event.key) then
