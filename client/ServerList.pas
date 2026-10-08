@@ -32,6 +32,11 @@ type
     Realistic: Boolean;
     Survival: Boolean;
     Advanced: Boolean;
+    WeaponsMod: Boolean;
+    AntiCheat: Boolean;
+    Dedicated: Boolean;
+    Respawn: Integer; // seconds
+    BonusFreq: Integer;
   end;
 
   TServerEntries = array of TServerEntry;
@@ -64,6 +69,10 @@ function ServerPing(const Key: string): Integer;
 // Asks the lobby for the players of a server (one request at a time, the
 // latest one waits for the running one).
 procedure RequestServerPlayers(const Server: TServerEntry);
+// Asks the lobby for the current state of one server, PollServerInfo
+// returns it once it arrived.
+procedure RequestServerInfo(const Server: TServerEntry);
+function PollServerInfo(out Server: TServerEntry): Boolean;
 // Names of the players on ip:port (bots included). False until fetched.
 function ServerPlayers(const Key: string; out Names: TStringArray): Boolean;
 procedure FreeServerList;
@@ -91,6 +100,16 @@ type
     constructor Create(const Servers: TServerEntries);
   end;
 
+  TServerInfoThread = class(TThread)
+  private
+    FServer: TServerEntry;
+    FURL: string;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const Server: TServerEntry; const URL: string);
+  end;
+
   TPlayersThread = class(TThread)
   private
     FServer: TServerEntry;
@@ -115,6 +134,34 @@ var
   PlayersThread: TPlayersThread;
   PendingPlayers: TServerEntry;
   HasPendingPlayers: Boolean;
+  InfoThread: TServerInfoThread;
+  InfoResult: TServerEntry;
+  HasInfoResult: Boolean;
+
+function ParseServer(Obj: TJSONObject): TServerEntry;
+begin
+  Result.Name := Trim(Obj.Get('Name', ''));
+  Result.IP := Obj.Get('IP', '');
+  Result.Port := Obj.Get('Port', 0);
+  Result.GameStyle := Obj.Get('GameStyle', '');
+  Result.CurrentMap := Obj.Get('CurrentMap', '');
+  Result.NumPlayers := Obj.Get('NumPlayers', 0);
+  Result.MaxPlayers := Obj.Get('MaxPlayers', 0);
+  Result.NumBots := Obj.Get('NumBots', 0);
+  Result.Version := Obj.Get('Version', '');
+  Result.Country := Obj.Get('Country', '');
+  Result.OS := Obj.Get('OS', '');
+  Result.Info := Trim(Obj.Get('Info', ''));
+  Result.IsPrivate := Obj.Get('Private', False);
+  Result.Realistic := Obj.Get('Realistic', False);
+  Result.Survival := Obj.Get('Survival', False);
+  Result.Advanced := Obj.Get('Advanced', False);
+  Result.WeaponsMod := Obj.Get('WM', False);
+  Result.AntiCheat := Obj.Get('AC', False);
+  Result.Dedicated := Obj.Get('Dedicated', False);
+  Result.Respawn := Obj.Get('Respawn', 0);
+  Result.BonusFreq := Obj.Get('BonusFreq', 0);
+end;
 
 function ParseServers(const Json: string): TServerEntries;
 var
@@ -139,22 +186,7 @@ begin
         Continue;
       Obj := TJSONObject(List.Items[i]);
 
-      Result[n].Name := Trim(Obj.Get('Name', ''));
-      Result[n].IP := Obj.Get('IP', '');
-      Result[n].Port := Obj.Get('Port', 0);
-      Result[n].GameStyle := Obj.Get('GameStyle', '');
-      Result[n].CurrentMap := Obj.Get('CurrentMap', '');
-      Result[n].NumPlayers := Obj.Get('NumPlayers', 0);
-      Result[n].MaxPlayers := Obj.Get('MaxPlayers', 0);
-      Result[n].NumBots := Obj.Get('NumBots', 0);
-      Result[n].Version := Obj.Get('Version', '');
-      Result[n].Country := Obj.Get('Country', '');
-      Result[n].OS := Obj.Get('OS', '');
-      Result[n].Info := Obj.Get('Info', '');
-      Result[n].IsPrivate := Obj.Get('Private', False);
-      Result[n].Realistic := Obj.Get('Realistic', False);
-      Result[n].Survival := Obj.Get('Survival', False);
-      Result[n].Advanced := Obj.Get('Advanced', False);
+      Result[n] := ParseServer(Obj);
 
       if (Result[n].IP <> '') and (Result[n].Port > 0) then
         Inc(n);
@@ -265,11 +297,73 @@ begin
   end;
 end;
 
+constructor TServerInfoThread.Create(const Server: TServerEntry; const URL: string);
+begin
+  FServer := Server;
+  FURL := URL;
+  FreeOnTerminate := False;
+  inherited Create(False);
+end;
+
+procedure TServerInfoThread.Execute;
+var
+  Http: TFPHTTPClient;
+  Root: TJSONData;
+begin
+  Http := TFPHTTPClient.Create(nil);
+  try
+    Http.AddHeader('User-Agent', 'soldatclient/' + SOLDAT_VERSION);
+    Http.ConnectTimeout := 5000;
+    Http.IOTimeout := 5000;
+    try
+      Root := GetJSON(Http.Get(Format('%s/v0/server/%s/%d', [FURL, FServer.IP, FServer.Port])));
+      try
+        if Root is TJSONObject then
+        begin
+          Lock.Enter;
+          try
+            InfoResult := ParseServer(TJSONObject(Root));
+            HasInfoResult := True;
+          finally
+            Lock.Leave;
+          end;
+        end;
+      finally
+        Root.Free;
+      end;
+    except
+      // asked again on the next poll
+    end;
+  finally
+    Http.Free;
+  end;
+end;
+
 function LobbyURL: string;
 begin
   Result := cl_lobbyurl.Value;
   while (Result <> '') and (Result[Length(Result)] = '/') do
     Delete(Result, Length(Result), 1);
+end;
+
+procedure RequestServerInfo(const Server: TServerEntry);
+begin
+  if (InfoThread <> nil) and not InfoThread.Finished then
+    Exit;
+  FreeAndNil(InfoThread);
+  InfoThread := TServerInfoThread.Create(Server, LobbyURL);
+end;
+
+function PollServerInfo(out Server: TServerEntry): Boolean;
+begin
+  Lock.Enter;
+  try
+    Result := HasInfoResult;
+    Server := InfoResult;
+    HasInfoResult := False;
+  finally
+    Lock.Leave;
+  end;
 end;
 
 procedure RequestServerPlayers(const Server: TServerEntry);
@@ -466,6 +560,11 @@ begin
   begin
     PlayersThread.WaitFor;
     FreeAndNil(PlayersThread);
+  end;
+  if InfoThread <> nil then
+  begin
+    InfoThread.WaitFor;
+    FreeAndNil(InfoThread);
   end;
 end;
 

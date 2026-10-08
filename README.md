@@ -13,13 +13,14 @@ This repository contains the source code of the so-called 1.8 version. Compared 
 This fork is a version of opensoldat that you can build on Linux and that runs natively, without Wine. It adds a game menu and lets you play on both Soldat 1.8 and Soldat 1.7.1 servers from one server list.
 
 - **Game menu.** The game starts in a menu and returns there after leaving a server:
-  - *Servers*: the public server list (the same one as on [soldat.pl/lobby](https://www.soldat.pl/pl/lobby)) with search, filters (mode, players, country, version, OS, password, realistic, survival, friends), sorting, ping, favorites pinned to the top, and direct connect by address. Selecting a server shows a preview of its current map and its players; star a player to add a friend, servers where friends were seen get a blue mark.
+  - *Servers*: the public server list (the same one as on [soldat.pl/lobby](https://www.soldat.pl/pl/lobby)) with search, filters (mode, players, country, version, OS, password, realistic, survival, friends), sorting, ping, favorites pinned to the top, and direct connect by address. Selecting a server shows a preview of its current map, its players and its details (respawn, bonuses, anti-cheat, description); star a player to add a friend, servers where friends were seen get a blue mark. *Quick play* joins the fullest server with a free slot and a good ping among the filtered ones, and a full server can be joined automatically once a slot is free (*Join when free*).
   - *Player*: nickname, colors, hair, headgear, chain and secondary weapon with a live preview of your soldier.
   - *Maps*: all maps with a rendered preview and details (description, spawn points, textures), and favorite maps pinned to the top.
   - *Settings*:
     - *Graphics*: monitor, window mode, resolution, vsync, frame limit, texture and scaling filters. Changes apply without a restart, and the window can be resized in windowed mode.
     - *Audio*: volume, distant battle sounds and ear ringing near explosions.
     - *Controls*: mouse sensitivity, key binds and the map vote key.
+    - *Interface*: player indicator, bonus colors, chat and kill log, HUD and minimap opacity.
     - *General*: path of the Soldat 1.7.1 client and the update check.
 - **Change map** in the in-game menu (ESC, 2, or F10) lists all maps of the server at once, favorites first.
 - **Updates:** the menu shows when a newer release is out on GitHub (can be turned off in *Settings, General*).
@@ -28,7 +29,7 @@ This fork is a version of opensoldat that you can build on Linux and that runs n
 
 ### Installing
 
-Releases are tagged `r<version>` (e.g. `r1.2.0`, set in `shared/RemixVersion.txt`). Download `soldat_<version>_amd64.deb` from [Releases](https://github.com/okkindel/soldat-linux/releases) and install it:
+Releases are tagged `r<version>` (e.g. `r1.3.0`, set in `shared/RemixVersion.txt`). Download `soldat_<version>_amd64.deb` from [Releases](https://github.com/okkindel/soldat-linux/releases) and install it:
 
 ```sh
 sudo apt install ./soldat_*_amd64.deb

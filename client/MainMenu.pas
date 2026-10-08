@@ -53,9 +53,11 @@ const
     'r_renderbackground', 'r_scaleinterface'
   );
 
-  OPTION_CVARS: array[0..5] of AnsiString = (
+  OPTION_CVARS: array[0..13] of AnsiString = (
     'snd_volume', 'snd_effects_battle', 'snd_effects_explosions', 'cl_sensitivity',
-    'cl_mapvote_key', 'cl_update_check'
+    'cl_mapvote_key', 'cl_update_check', 'ui_playerindicator', 'ui_bonuscolors',
+    'ui_console', 'ui_console_length', 'ui_killconsole', 'ui_killconsole_length',
+    'ui_status_transparency', 'ui_minimap_transparency'
   );
 
   LEGACY_VERSION = '1.7.1';
@@ -75,6 +77,8 @@ const
   ID_VOLUME      = 12;
   ID_SENSITIVITY = 13;
   ID_FRIEND      = 14;
+  ID_HUD_ALPHA   = 15;
+  ID_MAP_ALPHA   = 16;
 
   ROW_H = 26;
 
@@ -89,7 +93,7 @@ const
 
 type
   TMenuTab = (tabServers, tabPlayer, tabMaps, tabSettings);
-  TSettingsPage = (spGraphics, spAudio, spControls, spGeneral);
+  TSettingsPage = (spGraphics, spAudio, spControls, spInterface, spGeneral);
 
   TSortColumn = (scName, scMode, scMap, scPlayers, scPing, scVersion, scCountry);
 
@@ -165,7 +169,11 @@ var
   FriendText: WideString = '';
   FriendsScroll: Integer = 0;
   PlayersScroll: Integer = 0;
-  PanelTab: Integer = 0; // players or friends next to the servers
+  PanelTab: Integer = 0; // players, friends or info next to the servers
+  // waiting for a free slot on a full server
+  WaitingForSlot: Boolean = False;
+  WaitServer: TServerEntry;
+  LastSlotCheck: UInt32 = 0;
   ServerPreview: TMapPreview;
   ServerPreviewName: string = '';
   LegacyText: WideString = '';
@@ -1033,7 +1041,7 @@ end;
 // are kept.
 procedure SyncLegacyConfig(const ClientPath: string);
 const
-  SHARED_CVARS: array[0..26] of AnsiString = (
+  SHARED_CVARS: array[0..34] of AnsiString = (
     'cl_player_name', 'cl_player_shirt', 'cl_player_pants', 'cl_player_skin',
     'cl_player_hair', 'cl_player_jet', 'cl_player_hairstyle',
     'cl_player_headstyle', 'cl_player_chainstyle', 'cl_player_secwep',
@@ -1041,7 +1049,10 @@ const
     'r_fpslimit', 'r_maxfps', 'r_resizefilter', 'r_texturefilter',
     'r_mipmapping', 'r_smoothedges', 'r_weathereffects',
     'r_renderbackground', 'r_scaleinterface', 'snd_volume',
-    'snd_effects_battle', 'snd_effects_explosions', 'cl_sensitivity'
+    'snd_effects_battle', 'snd_effects_explosions', 'cl_sensitivity',
+    'ui_playerindicator', 'ui_bonuscolors', 'ui_console', 'ui_console_length',
+    'ui_killconsole', 'ui_killconsole_length', 'ui_status_transparency',
+    'ui_minimap_transparency'
   );
 var
   Overrides: TStringList;
@@ -1185,6 +1196,197 @@ begin
   RequestJoin;
 end;
 
+procedure StartWaitingForSlot(const Server: TServerEntry);
+begin
+  WaitingForSlot := True;
+  WaitServer := Server;
+  LastSlotCheck := 0;
+  SetInfoStatus(WideFormat(_('%s is full (%d/%d), joining once a slot is free...'),
+    [WideString(Server.Name), Server.NumPlayers, Server.MaxPlayers]));
+end;
+
+procedure StopWaitingForSlot;
+begin
+  WaitingForSlot := False;
+  SetInfoStatus('');
+end;
+
+// Asks the lobby about the awaited server every 15 seconds and joins it once
+// a slot is free.
+procedure CheckWaitForSlot;
+var
+  Info: TServerEntry;
+  i, Index: Integer;
+begin
+  if not WaitingForSlot then
+    Exit;
+
+  if PollServerInfo(Info) and (ServerKey(Info) = ServerKey(WaitServer)) then
+  begin
+    WaitServer := Info;
+    if Info.NumPlayers < Info.MaxPlayers then
+    begin
+      WaitingForSlot := False;
+      Index := -1;
+      for i := 0 to High(Servers) do
+        if ServerKey(Servers[i]) = ServerKey(Info) then
+          Index := i;
+      if Index < 0 then
+      begin
+        SetLength(Servers, Length(Servers) + 1);
+        Index := High(Servers);
+      end;
+      Servers[Index] := Info;
+      UpdateVisibleServers;
+      SelectServer(Index);
+      SDL_RestoreWindow(GameWindow);
+      SDL_RaiseWindow(GameWindow);
+      JoinAddress;
+      Exit;
+    end;
+    SetInfoStatus(WideFormat(_('%s is full (%d/%d), joining once a slot is free...'),
+      [WideString(Info.Name), Info.NumPlayers, Info.MaxPlayers]));
+  end;
+
+  if SDL_GetTicks - LastSlotCheck > 15000 then
+  begin
+    LastSlotCheck := SDL_GetTicks;
+    RequestServerInfo(WaitServer);
+  end;
+end;
+
+// Joins the visible (filtered) server with players, a free slot and a good
+// ping, the fullest one first.
+procedure QuickPlay;
+var
+  i, Best, Ping, BestPing: Integer;
+  Good, BestGood: Boolean;
+  s: TServerEntry;
+begin
+  Best := -1;
+  BestGood := False;
+  BestPing := MaxInt;
+  for i := 0 to High(Visible) do
+  begin
+    s := Servers[Visible[i]];
+    if s.IsPrivate or (s.NumPlayers = 0) or (s.NumPlayers >= s.MaxPlayers) then
+      Continue;
+    Ping := ServerPing(ServerKey(s));
+    if Ping < 0 then
+      Ping := 999;
+    Good := Ping <= 150;
+    if (Best < 0) or (Good and not BestGood) or ((Good = BestGood) and
+      ((s.NumPlayers > Servers[Best].NumPlayers) or
+      ((s.NumPlayers = Servers[Best].NumPlayers) and (Ping < BestPing)))) then
+    begin
+      Best := Visible[i];
+      BestGood := Good;
+      BestPing := Ping;
+    end;
+  end;
+
+  if Best < 0 then
+  begin
+    MenuStatus := _('No server with players and a free slot matches the filters.');
+    Exit;
+  end;
+
+  SelectServer(Best);
+  PasswordText := '';
+  JoinAddress;
+end;
+
+// Splits a text into lines that fit the width.
+function WrapText(const Text: WideString; Width, Size: Single): TStringArray;
+var
+  Words: TStringArray;
+  Line, Utf8: string;
+  i: Integer;
+begin
+  Result := nil;
+  SetFont(Size);
+  Utf8 := UTF8Encode(Text);
+  Words := Utf8.Split([' ']);
+  Line := '';
+  for i := 0 to High(Words) do
+  begin
+    if (Line <> '') and (TextWidth(WideString(Line + ' ' + Words[i])) > Width) then
+    begin
+      Result := Concat(Result, [Line]);
+      Line := Words[i];
+    end
+    else if Line = '' then
+      Line := Words[i]
+    else
+      Line := Line + ' ' + Words[i];
+  end;
+  if Line <> '' then
+    Result := Concat(Result, [Line]);
+end;
+
+// Details of the selected server from the lobby.
+procedure DrawServerInfo(PX, PY, PW, PH: Single);
+const
+  RH = 22;
+var
+  s: TServerEntry;
+  y: Single;
+  Lines: TStringArray;
+  Flags: WideString;
+  i: Integer;
+
+  procedure Line(const Text: WideString; c: LongWord = C_TEXT_DIM);
+  begin
+    if y + RH <= PY + PH then
+      DrawText(FitText(Text, PW - 20, 14), PX + 10, y, Color(c), 14, RH);
+    y := y + RH;
+  end;
+
+  procedure Flag(On: Boolean; const Caption: WideString);
+  begin
+    if not On then
+      Exit;
+    if Flags <> '' then
+      Flags := Flags + ', ';
+    Flags := Flags + Caption;
+  end;
+
+begin
+  y := PY;
+  if SelectedServer < 0 then
+  begin
+    Line(_('Select a server'));
+    Exit;
+  end;
+  s := Servers[SelectedServer];
+
+  Lines := WrapText(WideString(s.Name), PW - 20, 14);
+  for i := 0 to Min(1, High(Lines)) do
+    Line(WideString(Lines[i]), C_ACCENT);
+  Line(WideFormat(_('%s on %s'), [WideString(s.GameStyle), WideString(s.CurrentMap)]), C_TEXT);
+  Line(WideFormat(_('Players %d/%d, bots %d'), [s.NumPlayers, s.MaxPlayers, s.NumBots]));
+  Line(WideFormat('Soldat %s, %s, %s', [WideString(s.Version), WideString(s.OS), WideString(s.Country)]));
+  Line(WideFormat(_('Respawn %d s, bonuses %d'), [s.Respawn, s.BonusFreq]));
+
+  Flags := '';
+  Flag(s.IsPrivate, _('password'));
+  Flag(s.Realistic, _('realistic'));
+  Flag(s.Survival, _('survival'));
+  Flag(s.Advanced, _('advanced'));
+  Flag(s.WeaponsMod, _('weapons mod'));
+  Flag(s.AntiCheat, _('anti-cheat'));
+  if Flags <> '' then
+    Line(Flags);
+
+  if s.Info <> '' then
+  begin
+    y := y + 4;
+    Lines := WrapText(WideString(s.Info), PW - 20, 14);
+    for i := 0 to High(Lines) do
+      Line(WideString(Lines[i]), C_TEXT);
+  end;
+end;
+
 // Renders the preview of the selected server's map when it changed. Must run
 // outside of RenderMenu, it uses its own render target.
 procedure UpdateServerPreview;
@@ -1236,8 +1438,8 @@ var
     Hover := Inside(x, ListY - 32, w, 30);
     if PanelTab = Index then
       FillRect(x, ListY - 5, w, 3, Color(C_ACCENT));
-    DrawTextCentered(Caption, x, ListY - 32, w, 28,
-      Color(Choose((PanelTab = Index) or Hover, C_TEXT, C_TEXT_DIM)), 15);
+    DrawTextCentered(FitText(Caption, w - 6, 14), x, ListY - 32, w, 28,
+      Color(Choose((PanelTab = Index) or Hover, C_TEXT, C_TEXT_DIM)), 14);
     Result := Hover and MouseClicked and (PanelTab <> Index);
     if Result then
       PlaySound(SFX_MENUCLICK);
@@ -1315,13 +1517,20 @@ begin
     Caption := WideFormat(_('Players (%d)'), [Length(Names)])
   else
     Caption := _('Players');
-  if PanelTabButton(Caption, PX + 1, (PW - 2) / 2, 0) then
+  if PanelTabButton(Caption, PX + 1, (PW - 2) * 0.4, 0) then
     PanelTab := 0;
-  if PanelTabButton(WideFormat(_('Friends (%d)'), [Friends.Count]), PX + 1 + (PW - 2) / 2,
-    (PW - 2) / 2, 1) then
+  if PanelTabButton(WideFormat(_('Friends (%d)'), [Friends.Count]), PX + 1 + (PW - 2) * 0.4,
+    (PW - 2) * 0.4, 1) then
     PanelTab := 1;
+  if PanelTabButton(_('Info'), PX + 1 + (PW - 2) * 0.8, (PW - 2) * 0.2, 2) then
+    PanelTab := 2;
 
   y := ListY;
+  if PanelTab = 2 then
+  begin
+    DrawServerInfo(PX, ListY + 2, PW, PY + PH - 4 - ListY);
+    Exit;
+  end;
   if PanelTab = 0 then
   begin
     ListH := PY + PH - 4 - ListY;
@@ -1569,8 +1778,10 @@ begin
     Inc(TotalPlayers, Servers[i].NumPlayers);
     Inc(Index, Ord(IsCompatible(Servers[i])));
   end;
-  Info := WideFormat(_('%d servers (%d for v%s), %d players online'),
-    [Length(Servers), Index, WideString(MajorMinor(SOLDAT_VERSION)), TotalPlayers]);
+  Info := WideFormat(_('%d servers, %d players online'), [Length(Servers), TotalPlayers]);
+
+  if Button(_('Quick play'), LIST_X + 574, 92, 150, 34, True, Length(Visible) > 0) then
+    QuickPlay;
   SetFont(15);
   DrawText(Info, LIST_X + FULL_W - 160 - TextWidth(Info), 92, Color(C_TEXT_DIM), 15, 34);
 
@@ -1662,7 +1873,9 @@ begin
       if MouseDoubleClicked then
       begin
         SelectServer(Index);
-        if not s.IsPrivate then
+        if s.NumPlayers >= s.MaxPlayers then
+          StartWaitingForSlot(s)
+        else if not s.IsPrivate then
           JoinAddress
         else
         begin
@@ -1749,7 +1962,19 @@ begin
       _('Required'), _('Optional')), True) then
     JoinAddress;
 
-  if Button(_('Connect'), LIST_X + FULL_W - 260, y, 260, 38, True, AddressText <> '') then
+  // a full server is joined once a slot is free
+  if WaitingForSlot then
+  begin
+    if Button(_('Stop waiting'), LIST_X + FULL_W - 260, y, 260, 38) then
+      StopWaitingForSlot;
+  end
+  else if (SelectedServer >= 0) and (AddressText = WideString(ServerKey(Servers[SelectedServer]))) and
+    (Servers[SelectedServer].NumPlayers >= Servers[SelectedServer].MaxPlayers) then
+  begin
+    if Button(_('Join when free'), LIST_X + FULL_W - 260, y, 260, 38, True) then
+      StartWaitingForSlot(Servers[SelectedServer]);
+  end
+  else if Button(_('Connect'), LIST_X + FULL_W - 260, y, 260, 38, True, AddressText <> '') then
     JoinAddress;
 end;
 
@@ -3345,6 +3570,92 @@ begin
   SwitchSettingsPage(SettingsPage);
 end;
 
+procedure DrawInterfaceSettings;
+const
+  GX = 240;
+  GW = 800;
+  ROW = 36;
+  CHAT_LINES: array[0..5] of Integer = (3, 4, 6, 8, 10, 15);
+  KILL_LINES: array[0..4] of Integer = (5, 10, 15, 20, 30);
+var
+  Items: array of WideString;
+  y: Single;
+  v: Integer;
+
+  procedure Toggle(const Caption: WideString; Cvar: TBooleanCvar);
+  var
+    Value: Boolean;
+  begin
+    SetLength(Items, 2);
+    Items[0] := _('Off');
+    Items[1] := _('On');
+    Value := Selector(Caption, Items, Ord(Cvar.Value), GX, y, GW) = 1;
+    if Value <> Cvar.Value then
+    begin
+      Cvar.SetValue(Value);
+      OptionsDirty := True;
+    end;
+    y := y + ROW;
+  end;
+
+  procedure Lines(const Caption: WideString; Cvar: TIntegerCvar; const Values: array of Integer);
+  var
+    i, Index: Integer;
+  begin
+    SetLength(Items, Length(Values));
+    Index := 0;
+    for i := 0 to High(Values) do
+    begin
+      Items[i] := WideFormat(_('%d lines'), [Values[i]]);
+      if Values[i] = Cvar.Value then
+        Index := i;
+    end;
+    i := Selector(Caption, Items, Index, GX, y, GW);
+    if Values[i] <> Cvar.Value then
+    begin
+      Cvar.SetValue(Values[i]);
+      OptionsDirty := True;
+    end;
+    y := y + ROW;
+  end;
+
+  procedure Opacity(Id: Integer; const Caption: WideString; Cvar: TIntegerCvar);
+  begin
+    DrawText(Caption, GX, y, Color(C_TEXT_DIM), 16, 30);
+    v := Slider(Id, '', Round(Cvar.Value * 100 / 255), 100, GX + 210, y + 4, GW - 260, C_ACCENT);
+    if v <> Round(Cvar.Value * 100 / 255) then
+    begin
+      Cvar.SetValue(Round(v * 255 / 100));
+      OptionsDirty := True;
+    end;
+    y := y + ROW + 4;
+  end;
+
+begin
+  FillRect(GX - 30, 90, GW + 60, 420, Color(C_PANEL, 230));
+  StrokeRect(GX - 30, 90, GW + 60, 420, Color(C_PANEL_LINE));
+
+  y := 100;
+  DrawText(_('Interface'), GX, y, Color(C_ACCENT), 20, 30, True);
+  FillRect(GX, y + 32, GW, 1, Color(C_PANEL_LINE));
+  y := y + 42;
+
+  Toggle(_('Player indicator'), ui_playerindicator);
+  Toggle(_('Bonus colors'), ui_bonuscolors);
+  Toggle(_('Chat'), ui_console);
+  Lines(_('Chat length'), ui_console_length, CHAT_LINES);
+  Toggle(_('Kill log'), ui_killconsole);
+  Lines(_('Kill log length'), ui_killconsole_length, KILL_LINES);
+  Opacity(ID_HUD_ALPHA, _('HUD opacity'), ui_status_transparency);
+  Opacity(ID_MAP_ALPHA, _('Minimap opacity'), ui_minimap_transparency);
+
+  DrawText(_('Used by both game clients.'), GX, y + 4, Color(C_TEXT_DIM), 14, 24);
+
+  // a dragged slider is saved once released
+  if OptionsDirty and not MouseDown then
+    SaveSettings;
+end;
+
 procedure DrawGeneralSettings;
 const
   GX = 240;
@@ -3416,12 +3727,14 @@ begin
   Page(_('Graphics'), spGraphics, 90);
   Page(_('Audio'), spAudio, 134);
   Page(_('Controls'), spControls, 178);
-  Page(_('General'), spGeneral, 222);
+  Page(_('Interface'), spInterface, 222);
+  Page(_('General'), spGeneral, 266);
 
   case SettingsPage of
     spGraphics: DrawGraphicsTab;
     spAudio: DrawAudioTab;
     spControls: DrawControlsTab;
+    spInterface: DrawInterfaceSettings;
     spGeneral: DrawGeneralSettings;
   end;
 end;
@@ -3611,6 +3924,7 @@ begin
       HandleListKeys;
     CheckLegacyProcess;
     CheckLegacyDownload;
+    CheckWaitForSlot;
     UpdateMapPreview;
     UpdateServerPreview;
     RenderMenu;

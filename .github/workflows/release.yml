@@ -12,6 +12,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the release notes need the history and the tags
 
       - name: Check version
         run: |
@@ -36,8 +38,20 @@ jobs:
           make
           make deb
 
+      - name: Release notes
+        run: |
+          # the messages of the commits since the previous tag
+          PREV=$(git describe --tags --abbrev=0 "$GITHUB_REF_NAME^" 2>/dev/null || true)
+          {
+            echo "## Changes"
+            echo
+            git log --no-merges --reverse --format='### %s%n%n%b' "${PREV:+$PREV..}$GITHUB_REF_NAME"
+            echo
+            echo "Install with \`sudo apt install ./soldat_*_amd64.deb\`."
+          } > notes.md
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: build/soldat_*_amd64.deb
-          generate_release_notes: true
+          body_path: notes.md
