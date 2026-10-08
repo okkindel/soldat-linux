@@ -37,18 +37,28 @@ var
   KickMenu:  PGameMenu;
   MapMenu:   PGameMenu;
   KickMenuIndex: Integer = 0;
-  MapMenuIndex: Integer = 0;
+  // map menu: the maps in the order shown (favorites first) and the page
+  MapMenuMaps: array of string;
+  MapMenuFavorites: array of Boolean;
+  MapMenuPage: Integer = 0;
+
+const
+  MAP_MENU_COLS = 3;
+  MAP_MENU_ROWS = 12;
+  MAP_MENU_FIRST_CELL = 3; // buttons before the map cells: prev, next, back
 
 procedure InitGameMenus;
 procedure GameMenuShow(Menu: PGameMenu; Show: Boolean = True);
 function GameMenuAction(Menu: PGameMenu; ButtonIndex: Integer): Boolean;
 procedure GameMenuMouseMove();
 function GameMenuClick(): Boolean;
+// Updates the map menu with the names received so far.
+procedure UpdateMapMenu;
 
 implementation
 
 uses
-  SDL2, SysUtils, Client, Weapons, Game, GameStrings, ClientGame, Sound, InterfaceGraphics,
+  SDL2, SysUtils, Classes, Math, Client, Weapons, Game, GameStrings, ClientGame, Sound, InterfaceGraphics,
   Constants, Net, NetworkClientConnection, NetworkClientSprite, Sprites, Cvar,
   NetworkClientGame, NetworkClientMessages{$IFDEF STEAM}, Steam{$ENDIF};
 
@@ -156,17 +166,75 @@ begin
 
   KickMenu.Button[3].Active := False;  // TODO: ban not supported for now
 
-  // map menu
+  // map menu, shown instead of the esc menu
 
-  MapMenu.w := 370;
-  MapMenu.h := 90;
-  MapMenu.x := 125;
-  MapMenu.y := 355;
+  MapMenu.w := 580;
+  MapMenu.h := 400;
 
-  SetLength(MapMenu.Button, 3);
-  InitButton(MapMenu, 0, '<<<<',  15, 35, 90, 25);
-  InitButton(MapMenu, 1, '>>>>', 265, 35, 90, 25);
-  InitButton(MapMenu, 2, _('Select'), 120, 55, 90, 25);
+  if r_scaleinterface.Value then
+  begin
+    MapMenu.x := Round((GameWidth - MapMenu.w) / 2);
+    MapMenu.y := Round((GameHeight - MapMenu.h) / 2);
+  end
+  else
+  begin
+    MapMenu.x := Round((RenderWidth - MapMenu.w) / 2);
+    MapMenu.y := Round((RenderHeight - MapMenu.h) / 2);
+  end;
+
+  SetLength(MapMenu.Button, MAP_MENU_FIRST_CELL + MAP_MENU_COLS * MAP_MENU_ROWS);
+  InitButton(MapMenu, 0, '<', 15, MapMenu.h - 38, 40, 25);
+  InitButton(MapMenu, 1, '>', 65, MapMenu.h - 38, 40, 25);
+  InitButton(MapMenu, 2, _('Back'), MapMenu.w - 95, MapMenu.h - 38, 80, 25);
+  for i := 0 to MAP_MENU_COLS * MAP_MENU_ROWS - 1 do
+    InitButton(MapMenu, MAP_MENU_FIRST_CELL + i, '', 15 + (i div MAP_MENU_ROWS) * 185,
+      40 + (i mod MAP_MENU_ROWS) * 25, 180, 24, False);
+end;
+
+procedure UpdateMapMenu;
+var
+  Favorites: TStringList;
+  i, n, PageSize: Integer;
+  Pass: Boolean;
+begin
+  // favorites of the maps tab first, both in the server's order
+  if Length(MapMenuMaps) <> Length(VoteMapNames) then
+  begin
+    Favorites := TStringList.Create;
+    try
+      Favorites.CaseSensitive := False;
+      if FileExists(UserDirectory + 'configs/favorite_maps.txt') then
+        Favorites.LoadFromFile(UserDirectory + 'configs/favorite_maps.txt');
+
+      SetLength(MapMenuMaps, Length(VoteMapNames));
+      SetLength(MapMenuFavorites, Length(VoteMapNames));
+      n := 0;
+      for Pass := True downto False do
+        for i := 0 to High(VoteMapNames) do
+          if (VoteMapNames[i] <> '') and ((Favorites.IndexOf(VoteMapNames[i]) >= 0) = Pass) then
+          begin
+            MapMenuMaps[n] := VoteMapNames[i];
+            MapMenuFavorites[n] := Pass;
+            Inc(n);
+          end;
+      SetLength(MapMenuMaps, n);
+      SetLength(MapMenuFavorites, n);
+    finally
+      Favorites.Free;
+    end;
+  end;
+
+  PageSize := MAP_MENU_COLS * MAP_MENU_ROWS;
+  MapMenuPage := Max(0, Min(MapMenuPage, (Length(MapMenuMaps) - 1) div PageSize));
+  for i := 0 to PageSize - 1 do
+  begin
+    n := MapMenuPage * PageSize + i;
+    MapMenu.Button[MAP_MENU_FIRST_CELL + i].Active := n < Length(MapMenuMaps);
+    if n < Length(MapMenuMaps) then
+      MapMenu.Button[MAP_MENU_FIRST_CELL + i].Caption := WideString(MapMenuMaps[n]);
+  end;
+  MapMenu.Button[0].Active := MapMenuPage > 0;
+  MapMenu.Button[1].Active := (MapMenuPage + 1) * PageSize < Length(MapMenuMaps);
 end;
 
 procedure HideAll();
@@ -246,7 +314,13 @@ begin
   end
   else if (Menu = MapMenu) and Show then
   begin
-    ClientVoteMap(MapMenuIndex);
+    // fetch all names, one after another
+    VoteMapNames := nil;
+    MapMenuMaps := nil;
+    MapMenuPage := 0;
+    VoteMapFetchIndex := 0;
+    ClientVoteMap(0);
+    UpdateMapMenu;
     KickMenu.Active := False;
   end
   else if (Menu = KickMenu) and Show then
@@ -369,36 +443,22 @@ begin
     end
     else if Menu = MapMenu then
     begin
-      if PlayersNum < 1 then
-      begin
-        GameMenuShow(KickMenu, False);
-      end
-      else case ButtonIndex of
-        0: begin  // prev
-          if MapMenuIndex > 0 then
-          begin
-            MapMenuIndex := MapMenuIndex - 1;
-            ClientVoteMap(MapMenuIndex);
-          end;
-
-          Result := (KickMenuIndex <> 0);
-        end;
-
-        1: begin  // next
-          if MapMenuIndex < VoteMapCount - 1 then
-          begin
-            MapMenuIndex := MapMenuIndex + 1;
-            ClientVoteMap(MapMenuIndex);
-          end;
-
-          Result := (MapMenuIndex <= VoteMapCount - 1);
-        end;
-
-        2: begin  // vote map
+      Result := True;
+      case ButtonIndex of
+        0: Dec(MapMenuPage);
+        1: Inc(MapMenuPage);
+        2: GameMenuShow(EscMenu);
+      else
+        // vote for the map
+        i := MapMenuPage * MAP_MENU_COLS * MAP_MENU_ROWS + ButtonIndex - MAP_MENU_FIRST_CELL;
+        if i < Length(MapMenuMaps) then
+        begin
           GameMenuShow(EscMenu, False);
-          ClientSendStringMessage('votemap ' + WideString(VoteMapName), MSGTYPE_CMD);
+          ClientSendStringMessage('votemap ' + WideString(MapMenuMaps[i]), MSGTYPE_CMD);
         end;
       end;
+      if MapMenu.Active then
+        UpdateMapMenu;
     end
     else if (Menu = LimboMenu) and (MySprite > 0) then
     begin
@@ -467,7 +527,8 @@ begin
 
   for i := Low(GameMenu) to High(GameMenu) do
   begin
-    if GameMenu[i].Active then
+    // the map menu covers the esc menu
+    if GameMenu[i].Active and not ((@GameMenu[i] = EscMenu) and MapMenu.Active) then
     begin
       for j := Low(GameMenu[i].Button) to High(GameMenu[i].Button) do
       begin

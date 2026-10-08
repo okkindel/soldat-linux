@@ -1,22 +1,16 @@
 #!/bin/sh
 # Builds a Debian package from the build output directory.
-# Usage: build-deb.sh BIN_DIR OUTPUT_DIR VERSION [BUNDLE_LEGACY]
-# With BUNDLE_LEGACY=1 the Soldat 1.7.1 client is included, otherwise the
-# game downloads it from soldat.pl the first time a 1.7.1 server is joined.
-# Called by the "deb" and "deb-full" targets, see CMakeLists.txt.
+# Usage: build-deb.sh BIN_DIR OUTPUT_DIR VERSION
+# Called by the "deb" target, see CMakeLists.txt. The maintainer comes from
+# DEB_MAINTAINER (a CMake cache variable).
 set -e
 
 BIN_DIR=$1
 OUTPUT_DIR=$2
 VERSION=$3
-BUNDLE_LEGACY=${4:-0}
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 STAGE="$OUTPUT_DIR/deb-stage"
-if [ "$BUNDLE_LEGACY" = 1 ]; then
-  PACKAGE="$OUTPUT_DIR/soldat_${VERSION}_amd64-full.deb"
-else
-  PACKAGE="$OUTPUT_DIR/soldat_${VERSION}_amd64.deb"
-fi
+PACKAGE="$OUTPUT_DIR/soldat_${VERSION}_amd64.deb"
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/DEBIAN" "$STAGE/opt/soldat" "$STAGE/usr/bin" \
@@ -26,22 +20,6 @@ mkdir -p "$STAGE/DEBIAN" "$STAGE/opt/soldat" "$STAGE/usr/bin" \
 for f in soldat soldat.smod play-regular.ttf libGameNetworkingSockets.so libstb.so; do
   cp -p "$BIN_DIR/$f" "$STAGE/opt/soldat/"
 done
-if [ "$BUNDLE_LEGACY" = 1 ] && [ -d "$BIN_DIR/legacy" ]; then
-  mkdir -p "$STAGE/opt/soldat/legacy"
-  for f in soldat_x64 soldat.smod libstb.so play-regular.ttf mapslist.txt \
-    banned.txt bannedhw.txt iphist.dat remote.txt; do
-    [ -e "$BIN_DIR/legacy/$f" ] && cp -p "$BIN_DIR/legacy/$f" "$STAGE/opt/soldat/legacy/"
-  done
-  # default configs of the 1.7 client, taken from the download, not from
-  # bin/legacy which holds the settings of whoever built the package
-  DEFAULTS="$OUTPUT_DIR/downloads/legacy/soldat_linux/configs"
-  [ -d "$DEFAULTS" ] || DEFAULTS="$BIN_DIR/legacy/configs"
-  cp -R -p "$DEFAULTS" "$STAGE/opt/soldat/legacy/configs"
-  for d in demos downloads logs maps mods screens; do
-    mkdir -p "$STAGE/opt/soldat/legacy/$d"
-  done
-fi
-
 install -m 755 "$SCRIPT_DIR/soldat.sh" "$STAGE/usr/bin/soldat"
 install -m 644 "$SCRIPT_DIR/soldat.desktop" "$STAGE/usr/share/applications/soldat.desktop"
 
@@ -58,12 +36,10 @@ rm -rf "$ICON_TMP"
 # readable for everyone, writable by root only; programs executable
 chmod -R u=rwX,go=rX "$STAGE"
 find "$STAGE/opt/soldat" -type f -name "*.so" -exec chmod 755 {} +
-chmod 644 "$STAGE"/opt/soldat/legacy/configs/* 2>/dev/null || true
 chmod 755 "$STAGE/opt/soldat/soldat" "$STAGE/usr/bin/soldat"
-[ -e "$STAGE/opt/soldat/legacy/soldat_x64" ] && chmod 755 "$STAGE/opt/soldat/legacy/soldat_x64"
 
 SIZE=$(du -sk "$STAGE" | cut -f1)
-MAINTAINER="$(git config user.name 2>/dev/null || echo opensoldat) <$(git config user.email 2>/dev/null || echo noreply@soldat.pl)>"
+MAINTAINER="${DEB_MAINTAINER:-okkindel}"
 
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: soldat
@@ -71,23 +47,18 @@ Version: $VERSION
 Architecture: amd64
 Maintainer: $MAINTAINER
 Installed-Size: $SIZE
-Depends: libsdl2-2.0-0, libopenal1, libfreetype6, libphysfs1, libprotobuf23, libssl3, zlib1g, libx11-6
+Depends: libsdl2-2.0-0, libopenal1, libfreetype6, libphysfs1, libprotobuf23, libssl3, zlib1g, libx11-6, libxtst6
 Section: games
 Priority: optional
-Homepage: https://github.com/opensoldat/opensoldat
+Homepage: https://github.com/okkindel/soldat-linux
 Description: Soldat 1.8 and 1.7.1 for Linux in one package
  Opensoldat 1.8 with a main menu (server browser, maps, player and
  graphics settings), running natively on Linux. Servers running Soldat
  1.7.1 are joined with the official native Soldat 1.7.1 Linux client, so
  both kinds of servers can be played from one server list.
+ The Soldat 1.7.1 client is downloaded from soldat.pl the first time a
+ 1.7.1 server is joined.
 EOF
-
-if [ "$BUNDLE_LEGACY" = 1 ]; then
-  echo " This package includes the Soldat 1.7.1 client." >> "$STAGE/DEBIAN/control"
-else
-  echo " The Soldat 1.7.1 client is downloaded from soldat.pl the first time a" >> "$STAGE/DEBIAN/control"
-  echo " 1.7.1 server is joined." >> "$STAGE/DEBIAN/control"
-fi
 
 dpkg-deb --root-owner-group --build "$STAGE" "$PACKAGE"
 rm -rf "$STAGE"

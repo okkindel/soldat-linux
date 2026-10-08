@@ -785,41 +785,62 @@ end;
 
 procedure RenderMapWindowText;
 var
-  i: Integer;
+  i, Pages: Integer;
   x, y: Single;
-  Str: string;
+  Str: WideString;
   Btn: ^TGameButton;
+  Favorite: Boolean;
 begin
+  UpdateMapMenu;
+
   GfxDrawSprite(Textures[GFX_INTERFACE_BACK], MapMenu.x, MapMenu.y,
     MapMenu.w / BACKGROUND_WIDTH, MapMenu.h / BACKGROUND_WIDTH,
-    RGBA($FFFFFF, ui_status_transparency.Value * 0.56));
-
-  Str := VoteMapName;
+    RGBA($FFFFFF, ui_status_transparency.Value * 0.8));
 
   SetFontStyle(FONT_MENU);
   GfxTextShadow(1, 1, RGBA(0));
+  GfxTextColor(RGBA(135, 235, 135, 230));
+  GfxDrawText(_('Change map'), MapMenu.x + 15, MapMenu.y + 10);
 
-  if (MapMenuIndex > -1) then
-  begin
-    Btn := @MapMenu.Button[0];
-    GfxTextColor(RGBA(135, 235, 135, 230));
-    GfxDrawText(Str, Btn.x1, Btn.y1 - 15);
-  end;
+  SetFontStyle(FONT_SMALL);
+  GfxTextColor(RGBA(200, 200, 200, 230));
+  if VoteMapFetchIndex >= 0 then
+    Str := WideFormat(_('Loading maps %d/%d'), [Length(MapMenuMaps), Integer(VoteMapCount)])
+  else
+    Str := WideFormat(_('%d maps, favorites first'), [Length(MapMenuMaps)]);
+  GfxDrawText(Str, MapMenu.x + MapMenu.w - 15 - RectWidth(GfxTextMetrics(Str)), MapMenu.y + 14);
 
-  GfxTextColor(RGBA($FFFFFF, 250));
+  Pages := Max(1, (Length(MapMenuMaps) + MAP_MENU_COLS * MAP_MENU_ROWS - 1) div
+    (MAP_MENU_COLS * MAP_MENU_ROWS));
+  GfxDrawText(WideFormat('%d/%d', [MapMenuPage + 1, Pages]), MapMenu.x + 118,
+    MapMenu.y + MapMenu.h - 33);
 
+  SetFontStyle(FONT_MENU);
   for i := Low(MapMenu.Button) to High(MapMenu.Button) do
   begin
     Btn := @MapMenu.Button[i];
+    if not Btn.Active then
+      Continue;
 
-    if Btn.Active then
-    begin
-      x := Btn.x1 + 10 + Ord(Btn = HoveredButton);
-      y := Btn.y1 + (Btn.y2 - Btn.y1) / 2 - Ord(Btn = HoveredButton) -
-        RectHeight(GfxTextMetrics(Btn.Caption)) / 2;
+    Favorite := (i >= MAP_MENU_FIRST_CELL) and
+      MapMenuFavorites[MapMenuPage * MAP_MENU_COLS * MAP_MENU_ROWS + i - MAP_MENU_FIRST_CELL];
 
-      GfxDrawText(x, y);
-    end;
+    if Btn = HoveredButton then
+      GfxTextColor(RGBA(255, 255, 255, 255))
+    else if Favorite then
+      GfxTextColor(RGBA(241, 196, 15, 240))
+    else if i >= MAP_MENU_FIRST_CELL then
+      GfxTextColor(RGBA(210, 210, 210, 230))
+    else
+      GfxTextColor(RGBA(135, 235, 135, 230));
+
+    Str := Btn.Caption;
+    if Favorite then
+      Str := '* ' + Str;
+    x := Btn.x1 + 4 + Ord(Btn = HoveredButton);
+    y := Btn.y1 + (Btn.y2 - Btn.y1) / 2 - Ord(Btn = HoveredButton) -
+      RectHeight(GfxTextMetrics(Str)) / 2;
+    GfxDrawText(x, y);
   end;
 end;
 
@@ -828,7 +849,7 @@ begin
   if LimboMenu.Active then
     RenderWeaponMenuText;
 
-  if EscMenu.Active then
+  if EscMenu.Active and not MapMenu.Active then
     RenderEscMenuText(w, h);
 
   if TeamMenu.Active then

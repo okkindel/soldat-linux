@@ -200,6 +200,20 @@ begin
   VoteMsgReply := PMsg_VoteMapReply(NetMessage^.m_pData)^;
   VoteMapName := VoteMsgReply.MapName;
   VoteMapCount := VoteMsgReply.Count;
+
+  // replies come in the order of the requests, ask for the next name
+  if VoteMapFetchIndex >= 0 then
+  begin
+    if Length(VoteMapNames) <> VoteMapCount then
+      SetLength(VoteMapNames, VoteMapCount);
+    if VoteMapFetchIndex < VoteMapCount then
+      VoteMapNames[VoteMapFetchIndex] := VoteMapName;
+    Inc(VoteMapFetchIndex);
+    if VoteMapFetchIndex < VoteMapCount then
+      ClientVoteMap(VoteMapFetchIndex)
+    else
+      VoteMapFetchIndex := -1;
+  end;
 end;
 
 procedure ClientFreeCamTarget;

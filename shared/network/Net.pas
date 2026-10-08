@@ -828,6 +828,9 @@ var
   ReceivedUnAccepted: Boolean;
   VoteMapName: String;
   VoteMapCount: Word;
+  // all map names of the server, fetched one by one for the map menu
+  VoteMapNames: array of string;
+  VoteMapFetchIndex: Integer = -1; // -1 when not fetching
   {$ELSE}
   // We're assigning a dummy player class to all sprites that are currently not being controlled
   // by a player. This avoids nasty surprises with older code that reads .Player despite .Active

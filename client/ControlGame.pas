@@ -237,7 +237,20 @@ function MenuKeyDown(KeyMods: Byte; KeyCode: TSDL_ScanCode): Boolean;
 begin
   Result := False;
 
-  if (KeyMods = KM_NONE) and (KeyCode = SDL_SCANCODE_ESCAPE) then
+  // map vote key of the main menu (F10) opens the map menu directly
+  if (KeyMods = KM_NONE) and (cl_mapvote_key.Value <> '') and
+    (KeyCode = SDL_GetScancodeFromName(PChar(cl_mapvote_key.Value))) then
+  begin
+    Result := True;
+    if MapMenu.Active then
+      GameMenuShow(EscMenu, False)
+    else
+    begin
+      GameMenuShow(EscMenu);
+      GameMenuShow(MapMenu);
+    end;
+  end
+  else if (KeyMods = KM_NONE) and (KeyCode = SDL_SCANCODE_ESCAPE) then
   begin
     Result := True;
 

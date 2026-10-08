@@ -24,7 +24,7 @@ uses
   Gfx, Vector, Client, ClientGame, GameRendering, GostekGraphics, Sprites,
   Anims, Parts, Game, Net, Weapons, Constants, Cvar, Command, Input,
   GameStrings, ServerList, Sound, Version, Process, PhysFS, BaseUnix,
-  LegacyOverlay, LegacyDownload, MapPreview;
+  LegacyOverlay, LegacyDownload, MapPreview, UpdateCheck, openssl;
 
 const
   // everything is laid out in a 1280x720 design space scaled to the window
@@ -35,6 +35,8 @@ const
   FAVORITES_FILE = 'favorites.txt';
   FAVORITE_MAPS_FILE = 'favorite_maps.txt';
   FRIENDS_FILE = 'friends.txt';
+  SERVER_PREVIEW_W = 512;
+  SERVER_PREVIEW_H = 297;
   C_FRIEND = $5DADE2;
 
   PLAYER_CVARS: array[0..10] of AnsiString = (
@@ -163,6 +165,9 @@ var
   FriendText: WideString = '';
   FriendsScroll: Integer = 0;
   PlayersScroll: Integer = 0;
+  PanelTab: Integer = 0; // players or friends next to the servers
+  ServerPreview: TMapPreview;
+  ServerPreviewName: string = '';
   LegacyText: WideString = '';
   LegacyProcess: TProcess;
   // server to join once the 1.7 client finished downloading
@@ -1011,9 +1016,7 @@ begin
   MapVoteActive := False;
 end;
 
-// cl_legacy_client, or the client in legacy/ of the user directory (copied
-// there by the installed launcher, it needs to write next to itself) or of
-// the game directory.
+// cl_legacy_client, or the downloaded client in legacy/ of the user directory.
 function LegacyClientPath: string;
 begin
   Result := Trim(cl_legacy_client.Value);
@@ -1021,10 +1024,6 @@ begin
     Exit;
 
   Result := UserDirectory + 'legacy/soldat_x64';
-  if FileExists(Result) then
-    Exit;
-
-  Result := BaseDirectory + 'legacy/soldat_x64';
   if not FileExists(Result) then
     Result := '';
 end;
@@ -1186,20 +1185,43 @@ begin
   RequestJoin;
 end;
 
-// Players of the selected server and the friends list, next to the servers.
+// Renders the preview of the selected server's map when it changed. Must run
+// outside of RenderMenu, it uses its own render target.
+procedure UpdateServerPreview;
+var
+  Map: string;
+begin
+  if Tab <> tabServers then
+    Exit;
+  Map := '';
+  if SelectedServer >= 0 then
+    Map := Servers[SelectedServer].CurrentMap;
+  if Map = ServerPreviewName then
+    Exit;
+
+  FreeMapPreview(ServerPreview);
+  ServerPreviewName := Map;
+  if Map <> '' then
+    ServerPreview := RenderMapPreview(Map, SERVER_PREVIEW_W, SERVER_PREVIEW_H);
+end;
+
+// Map preview, players of the selected server and friends, next to the
+// servers.
 procedure DrawPlayersPanel(PX, PY, PW, PH: Single);
 const
   RH = 24;
-  PLAYER_ROWS = 7;
-  FRIENDS_Y = 206; // from the top of the panel
+  PREVIEW_H = 146;
 var
   Names: TStringArray;
   Fetched, Hover: Boolean;
   i, j, n, Rows: Integer;
-  y: Single;
+  y, ListY, ListH, tw: Single;
   FriendNames: array of string;
   FriendServer: array of Integer; // index into Servers, -1 = offline
   Name: string;
+  Caption: WideString;
+  White: TGfxColor;
+  u, v: Single;
 
   // star toggling the friend, returns True when clicked
   function FriendStar(x, y: Single; IsOn: Boolean): Boolean;
@@ -1209,49 +1231,48 @@ var
       Choose(Inside(x - 10, y, 22, RH), C_TEXT, $4A5540))));
   end;
 
+  function PanelTabButton(const Caption: WideString; x, w: Single; Index: Integer): Boolean;
+  begin
+    Hover := Inside(x, ListY - 32, w, 30);
+    if PanelTab = Index then
+      FillRect(x, ListY - 5, w, 3, Color(C_ACCENT));
+    DrawTextCentered(Caption, x, ListY - 32, w, 28,
+      Color(Choose((PanelTab = Index) or Hover, C_TEXT, C_TEXT_DIM)), 15);
+    Result := Hover and MouseClicked and (PanelTab <> Index);
+    if Result then
+      PlaySound(SFX_MENUCLICK);
+  end;
+
 begin
   FillRect(PX, PY, PW, PH, Color(C_PANEL, 230));
   StrokeRect(PX, PY, PW, PH, Color(C_PANEL_LINE));
 
-  // players of the selected server
-  FillRect(PX + 1, PY + 1, PW - 2, 30, Color($2A3220));
-  Names := nil;
-  Fetched := False;
-  if SelectedServer >= 0 then
-    Fetched := ServerPlayers(ServerKey(Servers[SelectedServer]), Names);
-  if Fetched then
-    DrawText(WideFormat(_('Players (%d)'), [Length(Names)]), PX + 10, PY, Color(C_TEXT_DIM), 15, 30)
-  else
-    DrawText(_('Players'), PX + 10, PY, Color(C_TEXT_DIM), 15, 30);
-
-  y := PY + 34;
-  if SelectedServer < 0 then
-    DrawText(FitText(_('Select a server to see who plays'), PW - 20, 14), PX + 10, y, Color(C_TEXT_DIM), 14, RH)
-  else if not Fetched then
-    DrawText(_('Loading...'), PX + 10, y, Color(C_TEXT_DIM), 14, RH)
-  else if Length(Names) = 0 then
-    DrawText(_('Nobody plays here'), PX + 10, y, Color(C_TEXT_DIM), 14, RH)
-  else
+  // current map of the selected server
+  FillRect(PX + 1, PY + 1, PW - 2, PREVIEW_H, Color($0B0D08));
+  if ServerPreview.Texture <> nil then
   begin
-    if Inside(PX, y, PW, PLAYER_ROWS * RH) then
-      PlayersScroll := PlayersScroll - WheelDelta;
-    PlayersScroll := EnsureRange(PlayersScroll, 0, Max(0, Length(Names) - PLAYER_ROWS));
-
-    for i := PlayersScroll to Min(High(Names), PlayersScroll + PLAYER_ROWS - 1) do
-    begin
-      if FriendStar(PX + 16, y, IsFriend(Names[i])) then
-        ToggleFriend(Names[i]);
-      DrawText(FitText(WideString(Names[i]), PW - 50, 15), PX + 32, y,
-        Color(Choose(IsFriend(Names[i]), C_FRIEND, C_TEXT)), 15, RH);
-      y := y + RH;
-    end;
-
-    // scrollbar
-    if Length(Names) > PLAYER_ROWS then
-      FillRect(PX + PW - 6, PY + 34 + (PLAYER_ROWS * RH - PLAYER_ROWS * RH * PLAYER_ROWS / Length(Names)) *
-        PlayersScroll / (Length(Names) - PLAYER_ROWS), 4,
-        PLAYER_ROWS * RH * PLAYER_ROWS / Length(Names), Color(C_PANEL_LINE));
-  end;
+    White := RGBA($FFFFFF);
+    u := ServerPreview.Width / ServerPreview.Texture.Width;
+    v := ServerPreview.Height / ServerPreview.Texture.Height;
+    // render targets are stored bottom up
+    GfxDrawQuad(ServerPreview.Texture,
+      GfxVertex(PX + 1, PY + 1, 0, v, White),
+      GfxVertex(PX + PW - 1, PY + 1, u, v, White),
+      GfxVertex(PX + PW - 1, PY + PREVIEW_H, u, 0, White),
+      GfxVertex(PX + 1, PY + PREVIEW_H, 0, 0, White));
+  end
+  else if ServerPreviewName <> '' then
+    DrawTextCentered(_('No preview of this map'), PX, PY, PW, PREVIEW_H, Color(C_TEXT_DIM), 14);
+  if ServerPreviewName <> '' then
+  begin
+    SetFont(14);
+    tw := TextWidth(WideString(ServerPreviewName));
+    FillRect(PX + 1, PY + PREVIEW_H - 22, Min(PW - 2, tw + 16), 22, Color($0B0D08, 200));
+    DrawText(FitText(WideString(ServerPreviewName), PW - 18, 14), PX + 8, PY + PREVIEW_H - 22,
+      Color(C_TEXT), 14, 22);
+  end
+  else
+    DrawTextCentered(_('Select a server'), PX, PY, PW, PREVIEW_H, Color(C_TEXT_DIM), 14);
 
   // friends, the ones playing first
   FriendNames := nil;
@@ -1281,12 +1302,64 @@ begin
     end;
   end;
 
-  y := PY + FRIENDS_Y;
-  FillRect(PX + 1, y, PW - 2, 30, Color($2A3220));
-  DrawText(_('Friends'), PX + 10, y, Color(C_TEXT_DIM), 15, 30);
-  y := y + 34;
+  // players of the selected server
+  Names := nil;
+  Fetched := False;
+  if SelectedServer >= 0 then
+    Fetched := ServerPlayers(ServerKey(Servers[SelectedServer]), Names);
 
-  Rows := Floor((PH - FRIENDS_Y - 34 - 40) / RH);
+  // tabs
+  ListY := PY + PREVIEW_H + 36;
+  FillRect(PX + 1, ListY - 34, PW - 2, 32, Color($2A3220));
+  if Fetched then
+    Caption := WideFormat(_('Players (%d)'), [Length(Names)])
+  else
+    Caption := _('Players');
+  if PanelTabButton(Caption, PX + 1, (PW - 2) / 2, 0) then
+    PanelTab := 0;
+  if PanelTabButton(WideFormat(_('Friends (%d)'), [Friends.Count]), PX + 1 + (PW - 2) / 2,
+    (PW - 2) / 2, 1) then
+    PanelTab := 1;
+
+  y := ListY;
+  if PanelTab = 0 then
+  begin
+    ListH := PY + PH - 4 - ListY;
+    Rows := Floor(ListH / RH);
+    if SelectedServer < 0 then
+      DrawText(FitText(_('Select a server to see who plays'), PW - 20, 14), PX + 10, y,
+        Color(C_TEXT_DIM), 14, RH)
+    else if not Fetched then
+      DrawText(_('Loading...'), PX + 10, y, Color(C_TEXT_DIM), 14, RH)
+    else if Length(Names) = 0 then
+      DrawText(_('Nobody plays here'), PX + 10, y, Color(C_TEXT_DIM), 14, RH)
+    else
+    begin
+      if Inside(PX, y, PW, Rows * RH) then
+        PlayersScroll := PlayersScroll - WheelDelta;
+      PlayersScroll := EnsureRange(PlayersScroll, 0, Max(0, Length(Names) - Rows));
+
+      for i := PlayersScroll to Min(High(Names), PlayersScroll + Rows - 1) do
+      begin
+        if FriendStar(PX + 16, y, IsFriend(Names[i])) then
+          ToggleFriend(Names[i]);
+        DrawText(FitText(WideString(Names[i]), PW - 50, 15), PX + 32, y,
+          Color(Choose(IsFriend(Names[i]), C_FRIEND, C_TEXT)), 15, RH);
+        y := y + RH;
+      end;
+
+      // scrollbar
+      if Length(Names) > Rows then
+        FillRect(PX + PW - 6, ListY + (Rows * RH - Rows * RH * Rows / Length(Names)) *
+          PlayersScroll / (Length(Names) - Rows), 4, Rows * RH * Rows / Length(Names),
+          Color(C_PANEL_LINE));
+    end;
+    Exit;
+  end;
+
+  // friends tab
+  ListH := PY + PH - 40 - ListY;
+  Rows := Floor(ListH / RH);
   if Inside(PX, y, PW, Rows * RH) then
     FriendsScroll := FriendsScroll - WheelDelta;
   FriendsScroll := EnsureRange(FriendsScroll, 0, Max(0, Length(FriendNames) - Rows));
@@ -3082,7 +3155,7 @@ begin
     y := Top + (i mod Half) * ROW;
     if i = MAP_KEY_ROW then
     begin
-      DrawText(_('Change map (1.7)'), x, y, Color(C_TEXT_DIM), 16, ROW - 4);
+      DrawText(_('Change map'), x, y, Color(C_TEXT_DIM), 16, ROW - 4);
       Key := cl_mapvote_key.Value;
     end
     else
@@ -3324,8 +3397,10 @@ end;
 
 procedure RenderMenu;
 var
-  Status: WideString;
-  x: Single;
+  Status, Caption: WideString;
+  x, w: Single;
+  Tag, URL: string;
+  Output: string;
 begin
   GfxTarget(nil);
   GfxViewport(0, 0, DrawW, DrawH);
@@ -3348,6 +3423,17 @@ begin
   FillRect(-OffsetX / Scale, 72, DrawW / Scale, 1, Color(C_PANEL_LINE));
   DrawText('SOLDAT', 40, -8, Color(C_ACCENT), 34, 72, True);
   DrawText(WideString('okkindel remix  r' + REMIX_VERSION), 42, 50, Color(C_TEXT_DIM), 13, 16);
+
+  // newer release on GitHub, opens its page
+  if UpdateAvailable(Tag, URL) then
+  begin
+    Caption := WideFormat(_('%s available'), [WideString(Tag)]);
+    // primary buttons use the bold font
+    SetFont(17, True);
+    w := TextWidth(Caption) + 32;
+    if Button(Caption, DESIGN_W - 156 - w, 18, w, 36, True) then
+      RunCommand('xdg-open', [URL], Output);
+  end;
 
   // the launcher pages are hidden while the 1.7 client runs
   if not InGame then
@@ -3413,6 +3499,11 @@ begin
   LoadFavorites;
   LoadFavoriteMaps;
   LoadFriends;
+
+  // the HTTP threads would load OpenSSL at the same time otherwise
+  InitSSLInterface;
+  if cl_update_check.Value then
+    StartUpdateCheck;
 
   // maps (and their textures) the 1.7 client downloaded from servers, with
   // the lowest priority, for the map lists and previews
@@ -3490,6 +3581,7 @@ begin
     CheckLegacyProcess;
     CheckLegacyDownload;
     UpdateMapPreview;
+    UpdateServerPreview;
     RenderMenu;
 
     // there is nothing to simulate here, so don't burn the CPU

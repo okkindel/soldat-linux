@@ -1,7 +1,6 @@
 project(soldat)
 
 option(ADD_ASSETS "Include soldat.smod and font file" True)
-option(ADD_LEGACY_CLIENT "Download the native Soldat 1.7 Linux client used for 1.7 servers" True)
 option(BUILD_CLIENT "Build client" True)
 option(BUILD_SERVER "Build server" True)
 option(BUILD_STEAM "Build steam version" False)
@@ -117,14 +116,6 @@ if(ADD_ASSETS)
   download_assets()
 endif()
 
-# The official 1.7 build exists only for x86_64
-if(ADD_LEGACY_CLIENT AND BUILD_CLIENT
-   AND CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64" AND NOT CROSS_LINUX_32)
-  include(${CMAKE_MODULE_PATH}/SoldatLegacyClient.cmake)
-  download_legacy_client()
-  set(LEGACY_CLIENT_ENABLED True)
-endif()
-
 if(BUILD_CLIENT OR BUILD_SERVER)
   if(BUILD_STEAM)
     # Create steam_appid.txt
@@ -147,19 +138,14 @@ if(BUILD_CLIENT)
     file(READ ${CMAKE_SOURCE_DIR}/shared/RemixVersion.txt REMIX_VERSION_STRING)
     string(REGEX REPLACE "['\n\r ]" "" REMIX_VERSION_STRING "${REMIX_VERSION_STRING}")
     set(DEB_VERSION ${SOLDAT_VERSION_STRING}+1.7.1-r${REMIX_VERSION_STRING})
+    set(DEB_MAINTAINER "okkindel" CACHE STRING "Maintainer field of the Debian package")
     # the game downloads the Soldat 1.7.1 client on first use
     add_custom_target(deb
-      COMMAND sh ${CMAKE_SOURCE_DIR}/packaging/linux/build-deb.sh
-              ${EXECUTABLE_OUTPUT_PATH} ${CMAKE_BINARY_DIR} ${DEB_VERSION} 0
+      COMMAND ${CMAKE_COMMAND} -E env DEB_MAINTAINER=${DEB_MAINTAINER}
+              sh ${CMAKE_SOURCE_DIR}/packaging/linux/build-deb.sh
+              ${EXECUTABLE_OUTPUT_PATH} ${CMAKE_BINARY_DIR} ${DEB_VERSION}
       DEPENDS soldat
       COMMENT "Building Debian package"
-    )
-    # with the Soldat 1.7.1 client included
-    add_custom_target(deb-full
-      COMMAND sh ${CMAKE_SOURCE_DIR}/packaging/linux/build-deb.sh
-              ${EXECUTABLE_OUTPUT_PATH} ${CMAKE_BINARY_DIR} ${DEB_VERSION} 1
-      DEPENDS soldat
-      COMMENT "Building Debian package with the Soldat 1.7.1 client"
     )
   endif()
 endif()

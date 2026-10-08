@@ -1,0 +1,43 @@
+# Pushing a tag like r1.2.0 (or 1.2.0) builds the Debian package and publishes
+# it as a GitHub release. The tag has to match shared/RemixVersion.txt.
+on:
+  push:
+    tags: ['r*', '[0-9]*']
+name: release
+permissions:
+  contents: write
+jobs:
+  deb:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check version
+        run: |
+          VERSION=$(tr -d "' \n\r" < shared/RemixVersion.txt)
+          TAG=${GITHUB_REF_NAME#r}
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match shared/RemixVersion.txt ($VERSION)"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential g++ cmake git fpc libprotobuf-dev protobuf-compiler libssl-dev libsdl2-dev libopenal-dev libphysfs-dev libfreetype6 imagemagick unzip
+
+      - name: Build package
+        run: |
+          export BUILD_ID=${GITHUB_SHA::8}
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
+          make
+          make deb
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/soldat_*_amd64.deb
+          generate_release_notes: true
