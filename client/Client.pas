@@ -178,6 +178,7 @@ var
   cl_runs: TIntegerCvar;
   cl_lang: TStringCvar;
   cl_lobbyurl: TStringCvar;
+  cl_legacy_client: TStringCvar;
 
   demo_speed: TSingleCvar;
   demo_rate: TIntegerCvar;

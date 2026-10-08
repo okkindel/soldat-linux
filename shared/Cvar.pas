@@ -810,6 +810,7 @@ begin
 
   cl_runs := TIntegerCvar.Add('cl_runs', 'Game runs', 0, 0, [CVAR_CLIENT], nil, 0, 32);
   cl_lang := TStringCvar.Add('cl_lang', 'Game language', '', '', [CVAR_CLIENT, CVAR_INITONLY], nil, 0, 2);
+  cl_legacy_client := TStringCvar.Add('cl_legacy_client', 'Path to a Soldat 1.7 client started for servers using the old protocol', '', '', [CVAR_CLIENT], nil, 0, 1024);
   cl_lobbyurl := TStringCvar.Add('cl_lobbyurl', 'URL of the lobby server used for the server list', 'https://api.soldat.pl', 'https://api.soldat.pl', [CVAR_CLIENT], nil, 1, 256);
 
 

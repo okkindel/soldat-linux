@@ -23,7 +23,7 @@ uses
   SDL2, SysUtils, Classes, Math, StrUtils,
   Gfx, Vector, Client, ClientGame, GameRendering, GostekGraphics, Sprites,
   Anims, Parts, Game, Net, Weapons, Constants, Cvar, Command, Input,
-  GameStrings, ServerList, Sound, Version;
+  GameStrings, ServerList, Sound, Version, Process;
 
 const
   // everything is laid out in a 1280x720 design space scaled to the window
@@ -33,10 +33,11 @@ const
   CONFIG_FILE = 'client.cfg';
   FAVORITES_FILE = 'favorites.txt';
 
-  PLAYER_CVARS: array[0..9] of AnsiString = (
+  PLAYER_CVARS: array[0..10] of AnsiString = (
     'cl_player_name', 'cl_player_shirt', 'cl_player_pants', 'cl_player_skin',
     'cl_player_hair', 'cl_player_jet', 'cl_player_hairstyle',
-    'cl_player_headstyle', 'cl_player_chainstyle', 'cl_player_secwep'
+    'cl_player_headstyle', 'cl_player_chainstyle', 'cl_player_secwep',
+    'cl_legacy_client'
   );
 
   GRAPHICS_CVARS: array[0..14] of AnsiString = (
@@ -55,6 +56,7 @@ const
   ID_SLIDER_R    = 5;
   ID_SLIDER_G    = 6;
   ID_SLIDER_B    = 7;
+  ID_LEGACY      = 8;
 
   ROW_H = 26;
 
@@ -109,6 +111,8 @@ var
   ListRequested: Boolean = False;
   LastPingSort: UInt32 = 0;
   Favorites: TStringList; // "ip:port" of servers starred by the player
+  LegacyText: WideString = '';
+  LegacyProcess: TProcess;
 
   // player
   NameText: WideString = '';
@@ -755,6 +759,97 @@ begin
 end;
 
 
+// Starts the Soldat 1.7 client configured in cl_legacy_client, which speaks
+// the protocol of the servers this client can't join.
+// cl_legacy_client, or the client shipped next to the game in legacy/.
+function LegacyClientPath: string;
+begin
+  Result := Trim(cl_legacy_client.Value);
+  if Result = '' then
+  begin
+    Result := BaseDirectory + 'legacy/soldat_x64';
+    if not FileExists(Result) then
+      Result := '';
+  end;
+end;
+
+// Copies the player and display settings of this menu into the config of
+// the 1.7 client, which uses the same cvars. Its other lines (binds etc.)
+// are kept.
+procedure SyncLegacyConfig(const ClientPath: string);
+const
+  SHARED_CVARS: array[0..23] of AnsiString = (
+    'cl_player_name', 'cl_player_shirt', 'cl_player_pants', 'cl_player_skin',
+    'cl_player_hair', 'cl_player_jet', 'cl_player_hairstyle',
+    'cl_player_headstyle', 'cl_player_chainstyle', 'cl_player_secwep',
+    'r_fullscreen', 'r_screenwidth', 'r_screenheight', 'r_swapeffect',
+    'r_fpslimit', 'r_maxfps', 'r_resizefilter', 'r_texturefilter',
+    'r_mipmapping', 'r_smoothedges', 'r_weathereffects',
+    'r_renderbackground', 'r_scaleinterface', 'snd_volume'
+  );
+var
+  Overrides: TStringList;
+  ConfigPath: string;
+begin
+  ConfigPath := ExtractFilePath(ClientPath) + 'configs/client.cfg';
+  if not FileExists(ConfigPath) then
+    Exit;
+
+  Overrides := TStringList.Create;
+  try
+    // the 1.7 client takes the head gear graphics id instead of 0/1/2
+    case cl_player_headstyle.Value of
+      HEADSTYLE_HELMET: Overrides.Values['cl_player_headstyle'] := '34';
+      HEADSTYLE_HAT: Overrides.Values['cl_player_headstyle'] := '124';
+    else
+      Overrides.Values['cl_player_headstyle'] := '0';
+    end;
+    SaveConfigFile(ConfigPath, SHARED_CVARS, Overrides);
+  finally
+    Overrides.Free;
+  end;
+end;
+
+function LaunchLegacyClient(const Server: TServerEntry): Boolean;
+var
+  Path: string;
+begin
+  Result := False;
+  Path := LegacyClientPath;
+  if (Path = '') or not FileExists(Path) then
+    Exit;
+
+  if (LegacyProcess <> nil) and LegacyProcess.Running then
+  begin
+    MenuStatus := _('The Soldat 1.7 client is already running.');
+    Result := True;
+    Exit;
+  end;
+
+  SaveSettings;
+  SyncLegacyConfig(Path);
+
+  FreeAndNil(LegacyProcess);
+  LegacyProcess := TProcess.Create(nil);
+  LegacyProcess.Executable := Path;
+  LegacyProcess.CurrentDirectory := ExtractFilePath(Path);
+  LegacyProcess.Parameters.Add('-join');
+  LegacyProcess.Parameters.Add(Server.IP);
+  LegacyProcess.Parameters.Add(IntToStr(Server.Port));
+  if PasswordText <> '' then
+    LegacyProcess.Parameters.Add(UTF8Encode(PasswordText));
+
+  try
+    LegacyProcess.Execute;
+    MenuStatus := WideFormat(_('Started the Soldat %s client for %s'),
+      [WideString(Server.Version), WideString(Server.Name)]);
+    Result := True;
+  except
+    on E: Exception do
+      MenuStatus := WideString('Could not start ' + Path + ': ' + E.Message);
+  end;
+end;
+
 procedure JoinAddress;
 var
   Address, Port: string;
@@ -770,9 +865,11 @@ begin
   if (SelectedServer >= 0) and (Address = ServerKey(Servers[SelectedServer])) and
     not IsCompatible(Servers[SelectedServer]) then
   begin
-    MenuStatus := WideFormat(_('This server runs Soldat %s, which can''t be joined with ' +
-      'this game version (%s) - the network protocols differ.'),
-      [WideString(Servers[SelectedServer].Version), WideString(SOLDAT_VERSION)]);
+    if not LaunchLegacyClient(Servers[SelectedServer]) then
+      MenuStatus := WideFormat(_('This server runs Soldat %s, which can''t be joined with ' +
+        'this game version (%s). Set the path to a Soldat %s client below to play there.'),
+        [WideString(Servers[SelectedServer].Version), WideString(SOLDAT_VERSION),
+         WideString(Servers[SelectedServer].Version)]);
     Exit;
   end;
 
@@ -1141,6 +1238,20 @@ begin
 
   if Button(_('Connect'), LIST_X + LIST_W - 260, y, 260, 38, True, AddressText <> '') then
     JoinAddress;
+
+  // client used for servers with the old protocol
+  y := y + 46;
+  DrawText(_('Soldat 1.7 client'), LIST_X, y, Color(C_TEXT_DIM), 15, 28);
+  TextField(ID_LEGACY, LegacyText, LIST_X + 160, y, 750, 28, 1024,
+    Choose(LegacyClientPath <> '', WideString(LegacyClientPath),
+      _('Path to soldat_x64 (used for 1.7 servers)')));
+  if UTF8Encode(LegacyText) <> cl_legacy_client.Value then
+  begin
+    cl_legacy_client.SetValue(UTF8Encode(LegacyText));
+    PlayerDirty := True;
+  end;
+  if (LegacyText <> '') and not FileExists(UTF8Encode(LegacyText)) then
+    DrawText(_('File not found'), LIST_X + 925, y, Color(C_ERROR), 15, 28);
 end;
 
 {******************************************************************************}
@@ -2005,6 +2116,7 @@ end;
 procedure InitMenu;
 begin
   LoadFavorites;
+  LegacyText := WideString(cl_legacy_client.Value);
   NameText := WideString(cl_player_name.Value);
   InitPreview;
   LoadPendingGraphics;
@@ -2076,4 +2188,5 @@ end;
 finalization
   FreeAndNil(PreviewPlayer);
   FreeAndNil(Favorites);
+  FreeAndNil(LegacyProcess);
 end.

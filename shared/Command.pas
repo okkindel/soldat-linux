@@ -10,6 +10,8 @@ function ParseInput(Input: String; Sender: Byte = 0): Boolean; overload;
 function LoadConfig(ConfigName: AnsiString): Boolean;
 function SaveConfig(ConfigName: AnsiString; const CvarNames: array of AnsiString;
   Overrides: TStrings = nil): Boolean;
+function SaveConfigFile(Path: AnsiString; const CvarNames: array of AnsiString;
+  Overrides: TStrings = nil): Boolean;
 
 const
   MAX_COMMANDS = 1024;
@@ -487,8 +489,15 @@ end;
 // that can only be changed at startup.
 function SaveConfig(ConfigName: AnsiString; const CvarNames: array of AnsiString;
   Overrides: TStrings = nil): Boolean;
+begin
+  Result := SaveConfigFile(UserDirectory + 'configs/' + ConfigName, CvarNames, Overrides);
+end;
+
+// Same as SaveConfig, for a config file anywhere on disk.
+function SaveConfigFile(Path: AnsiString; const CvarNames: array of AnsiString;
+  Overrides: TStrings = nil): Boolean;
 var
-  Path, Line, Name: string;
+  Line, Name: string;
   Lines: TStringList;
   Saved: array of Boolean;
   ACvar: TCvarBase;
@@ -505,7 +514,6 @@ var
 
 begin
   Result := False;
-  Path := UserDirectory + 'configs/' + ConfigName;
   Lines := TStringList.Create;
   try
     try
@@ -562,7 +570,7 @@ begin
       Result := True;
     except
       on E: Exception do
-        MainConsole.Console('Failed to save config file: ' + ConfigName + ' (' + E.Message + ')',
+        MainConsole.Console('Failed to save config file: ' + Path + ' (' + E.Message + ')',
           WARNING_MESSAGE_COLOR);
     end;
   finally
