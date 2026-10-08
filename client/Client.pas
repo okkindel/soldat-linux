@@ -176,6 +176,7 @@ var
   cl_lang: TStringCvar;
   cl_lobbyurl: TStringCvar;
   cl_legacy_client: TStringCvar;
+  cl_mapvote_key: TStringCvar;
 
   demo_speed: TSingleCvar;
   demo_rate: TIntegerCvar;

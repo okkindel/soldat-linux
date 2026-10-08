@@ -12,14 +12,18 @@ unit LegacyOverlay;
 
 interface
 
-// Starts listening for the hotkey (F10) while the client with this process
-// id is running.
-procedure OverlayStart(GamePid: Integer);
+// Starts listening for the hotkey (a key name like "F10", none when empty)
+// while the client with this process id is running.
+procedure OverlayStart(GamePid: Integer; const KeyName: string);
+// True when the key name can be used as the hotkey.
+function OverlayKeyKnown(const KeyName: string): Boolean;
 procedure OverlayStop;
 // True once for every hotkey press since the last call.
 function OverlayHotkeyPressed: Boolean;
 // Brings the window of the given process to the front.
 procedure OverlayActivate(Pid: Integer);
+// True once the process has opened its window.
+function OverlayWindowShown(Pid: Integer): Boolean;
 // Activates the game window and types Text into its chat (opened with
 // ChatKey), then presses Enter. Returns False when it was not possible.
 function OverlayTypeInGame(const Text: string; ChatKey: Char = 't'): Boolean;
@@ -64,9 +68,42 @@ begin
   Result := Assigned(XTestFakeKeyEvent);
 end;
 
-procedure OverlayStart(GamePid: Integer);
+// Key names as the game writes them (SDL) to X keysyms.
+function KeyNameToKeysym(const KeyName: string): TKeySym;
+const
+  NAMES: array[0..12, 0..1] of string = (
+    ('Space', 'space'), ('Backspace', 'BackSpace'), ('Left Shift', 'Shift_L'),
+    ('Right Shift', 'Shift_R'), ('Left Ctrl', 'Control_L'), ('Right Ctrl', 'Control_R'),
+    ('Left Alt', 'Alt_L'), ('Right Alt', 'Alt_R'), ('CapsLock', 'Caps_Lock'),
+    ('PageUp', 'Prior'), ('PageDown', 'Next'), ('Escape', 'Escape'), ('Return', 'Return')
+  );
 var
   i: Integer;
+begin
+  Result := NoSymbol;
+  if KeyName = '' then
+    Exit;
+
+  for i := Low(NAMES) to High(NAMES) do
+    if SameText(KeyName, NAMES[i, 0]) then
+      Exit(XStringToKeysym(PChar(NAMES[i, 1])));
+
+  // Latin-1 characters have keysyms equal to their code
+  if Length(KeyName) = 1 then
+    Exit(Ord(LowerCase(KeyName)[1]));
+
+  Result := XStringToKeysym(PChar(KeyName));
+end;
+
+function OverlayKeyKnown(const KeyName: string): Boolean;
+begin
+  Result := KeyNameToKeysym(KeyName) <> NoSymbol;
+end;
+
+procedure OverlayStart(GamePid: Integer; const KeyName: string);
+var
+  i: Integer;
+  Sym: TKeySym;
 begin
   OverlayStop;
   TargetPid := GamePid;
@@ -76,7 +113,12 @@ begin
     Exit;
 
   XSetErrorHandler(@IgnoreXError);
-  HotkeyCode := XKeysymToKeycode(Dpy, XK_F10);
+  HotkeyCode := 0;
+  Sym := KeyNameToKeysym(KeyName);
+  if Sym <> NoSymbol then
+    HotkeyCode := XKeysymToKeycode(Dpy, Sym);
+  if HotkeyCode = 0 then
+    Exit;
   for i := Low(LOCK_MASKS) to High(LOCK_MASKS) do
     XGrabKey(Dpy, HotkeyCode, LOCK_MASKS[i], DefaultRootWindow(Dpy), 0,
       GrabModeAsync, GrabModeAsync);
@@ -90,8 +132,9 @@ begin
   if Dpy = nil then
     Exit;
 
-  for i := Low(LOCK_MASKS) to High(LOCK_MASKS) do
-    XUngrabKey(Dpy, HotkeyCode, LOCK_MASKS[i], DefaultRootWindow(Dpy));
+  if HotkeyCode <> 0 then
+    for i := Low(LOCK_MASKS) to High(LOCK_MASKS) do
+      XUngrabKey(Dpy, HotkeyCode, LOCK_MASKS[i], DefaultRootWindow(Dpy));
   XCloseDisplay(Dpy);
   Dpy := nil;
 end;
@@ -189,6 +232,11 @@ procedure OverlayActivate(Pid: Integer);
 begin
   if Dpy <> nil then
     ActivateWindow(FindWindow(Pid));
+end;
+
+function OverlayWindowShown(Pid: Integer): Boolean;
+begin
+  Result := (Dpy <> nil) and (FindWindow(Pid) <> 0);
 end;
 
 procedure PressKey(Code: TKeyCode; Shift: Boolean);

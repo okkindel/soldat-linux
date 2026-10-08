@@ -2,7 +2,8 @@
 {                                                       }
 {       Server List Unit for SOLDAT                     }
 {                                                       }
-{       Fetches the public server list from the lobby   }
+{       Fetches the public server list, and the players }
+{       of a server, from the lobby                     }
 {                                                       }
 {*******************************************************}
 
@@ -60,6 +61,11 @@ function ServerListStatus: TServerListStatus;
 function ServerListError: string;
 // Round trip estimate in ms for ip:port, or PING_PENDING / PING_FAILED.
 function ServerPing(const Key: string): Integer;
+// Asks the lobby for the players of a server (one request at a time, the
+// latest one waits for the running one).
+procedure RequestServerPlayers(const Server: TServerEntry);
+// Names of the players on ip:port (bots included). False until fetched.
+function ServerPlayers(const Key: string; out Names: TStringArray): Boolean;
 procedure FreeServerList;
 
 implementation
@@ -85,6 +91,16 @@ type
     constructor Create(const Servers: TServerEntries);
   end;
 
+  TPlayersThread = class(TThread)
+  private
+    FServer: TServerEntry;
+    FURL: string;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const Server: TServerEntry; const URL: string);
+  end;
+
 var
   Lock: TCriticalSection;
   Thread: TServerListThread;
@@ -94,6 +110,11 @@ var
   HasNewData: Boolean;
   Pings: TStringList; // "ip:port" -> ms
   NextPing: LongInt;
+  // "ip:port" -> '|' followed by the names separated by tabs
+  PlayerLists: TStringList;
+  PlayersThread: TPlayersThread;
+  PendingPlayers: TServerEntry;
+  HasPendingPlayers: Boolean;
 
 function ParseServers(const Json: string): TServerEntries;
 var
@@ -163,6 +184,113 @@ begin
   finally
     Lock.Leave;
   end;
+end;
+
+function ServerPlayers(const Key: string; out Names: TStringArray): Boolean;
+var
+  Value: string;
+begin
+  // start the request that waited for the previous one
+  if HasPendingPlayers and (PlayersThread <> nil) and PlayersThread.Finished then
+    RequestServerPlayers(PendingPlayers);
+
+  Lock.Enter;
+  try
+    Value := PlayerLists.Values[Key];
+  finally
+    Lock.Leave;
+  end;
+
+  Result := Value <> '';
+  Names := nil;
+  if Length(Value) > 1 then
+    Names := Copy(Value, 2, MaxInt).Split([#9]);
+end;
+
+procedure SetPlayers(const Key: string; const Names: string);
+begin
+  Lock.Enter;
+  try
+    PlayerLists.Values[Key] := '|' + Names;
+  finally
+    Lock.Leave;
+  end;
+end;
+
+constructor TPlayersThread.Create(const Server: TServerEntry; const URL: string);
+begin
+  FServer := Server;
+  FURL := URL;
+  FreeOnTerminate := False;
+  inherited Create(False);
+end;
+
+procedure TPlayersThread.Execute;
+var
+  Http: TFPHTTPClient;
+  Root: TJSONData;
+  List: TJSONArray;
+  Names: string;
+  j: Integer;
+begin
+  Http := TFPHTTPClient.Create(nil);
+  try
+    Http.AddHeader('User-Agent', 'soldatclient/' + SOLDAT_VERSION);
+    Http.ConnectTimeout := 5000;
+    Http.IOTimeout := 5000;
+    try
+      Root := GetJSON(Http.SimpleGet(Format('%s/v0/server/%s/%d/players',
+        [FURL, FServer.IP, FServer.Port])));
+      try
+        Names := '';
+        if (Root is TJSONObject) and (TJSONObject(Root).Find('Players') is TJSONArray) then
+        begin
+          List := TJSONObject(Root).Arrays['Players'];
+          for j := 0 to List.Count - 1 do
+          begin
+            if j > 0 then
+              Names := Names + #9;
+            Names := Names + StringReplace(List.Items[j].AsString, #9, ' ', [rfReplaceAll]);
+          end;
+        end;
+        SetPlayers(FServer.IP + ':' + IntToStr(FServer.Port), Names);
+      finally
+        Root.Free;
+      end;
+    except
+      // keeps the names from the last request
+    end;
+  finally
+    Http.Free;
+  end;
+end;
+
+function LobbyURL: string;
+begin
+  Result := cl_lobbyurl.Value;
+  while (Result <> '') and (Result[Length(Result)] = '/') do
+    Delete(Result, Length(Result), 1);
+end;
+
+procedure RequestServerPlayers(const Server: TServerEntry);
+begin
+  // empty servers need no request (bots aren't counted)
+  if Server.NumPlayers = 0 then
+  begin
+    SetPlayers(Server.IP + ':' + IntToStr(Server.Port), '');
+    Exit;
+  end;
+
+  if (PlayersThread <> nil) and not PlayersThread.Finished then
+  begin
+    PendingPlayers := Server;
+    HasPendingPlayers := True;
+    Exit;
+  end;
+
+  FreeAndNil(PlayersThread);
+  HasPendingPlayers := False;
+  PlayersThread := TPlayersThread.Create(Server, LobbyURL);
 end;
 
 constructor TPingWorker.Create(const Servers: TServerEntries);
@@ -242,7 +370,6 @@ begin
         Fetched := Servers;
         HasNewData := True;
         Status := slsDone;
-        Pings.Clear;
       finally
         Lock.Leave;
       end;
@@ -280,9 +407,7 @@ begin
     FreeAndNil(Thread);
   end;
 
-  URL := cl_lobbyurl.Value;
-  while (URL <> '') and (URL[Length(URL)] = '/') do
-    Delete(URL, Length(URL), 1);
+  URL := LobbyURL;
 
   Lock.Enter;
   try
@@ -337,14 +462,21 @@ begin
     Thread.WaitFor;
     FreeAndNil(Thread);
   end;
+  if PlayersThread <> nil then
+  begin
+    PlayersThread.WaitFor;
+    FreeAndNil(PlayersThread);
+  end;
 end;
 
 initialization
   Lock := TCriticalSection.Create;
   Pings := TStringList.Create;
+  PlayerLists := TStringList.Create;
 
 finalization
   FreeServerList;
   Pings.Free;
+  PlayerLists.Free;
   Lock.Free;
 end.

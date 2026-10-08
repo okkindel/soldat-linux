@@ -2,8 +2,8 @@
 {                                                       }
 {       Main Menu Unit for SOLDAT                       }
 {                                                       }
-{       Server browser, player and graphics settings    }
-{       shown before joining and after leaving a game   }
+{       Server browser and settings, and the in-game    }
+{       screen while the Soldat 1.7 client runs         }
 {                                                       }
 {*******************************************************}
 
@@ -23,8 +23,8 @@ uses
   SDL2, SysUtils, Classes, Math, StrUtils,
   Gfx, Vector, Client, ClientGame, GameRendering, GostekGraphics, Sprites,
   Anims, Parts, Game, Net, Weapons, Constants, Cvar, Command, Input,
-  GameStrings, ServerList, Sound, Version, Process, PhysFS, LegacyOverlay,
-  LegacyDownload, MapPreview;
+  GameStrings, ServerList, Sound, Version, Process, PhysFS, BaseUnix,
+  LegacyOverlay, LegacyDownload, MapPreview;
 
 const
   // everything is laid out in a 1280x720 design space scaled to the window
@@ -34,6 +34,8 @@ const
   CONFIG_FILE = 'client.cfg';
   FAVORITES_FILE = 'favorites.txt';
   FAVORITE_MAPS_FILE = 'favorite_maps.txt';
+  FRIENDS_FILE = 'friends.txt';
+  C_FRIEND = $5DADE2;
 
   PLAYER_CVARS: array[0..10] of AnsiString = (
     'cl_player_name', 'cl_player_shirt', 'cl_player_pants', 'cl_player_skin',
@@ -49,6 +51,13 @@ const
     'r_renderbackground', 'r_scaleinterface'
   );
 
+  OPTION_CVARS: array[0..4] of AnsiString = (
+    'snd_volume', 'snd_effects_battle', 'snd_effects_explosions', 'cl_sensitivity',
+    'cl_mapvote_key'
+  );
+
+  LEGACY_VERSION = '1.7.1';
+
   // widget ids for keyboard focus and dragging
   ID_NONE        = 0;
   ID_SEARCH      = 1;
@@ -61,6 +70,9 @@ const
   ID_LEGACY      = 8;
   ID_MAPSEARCH   = 9;
   ID_MAPSTAB     = 11;
+  ID_VOLUME      = 12;
+  ID_SENSITIVITY = 13;
+  ID_FRIEND      = 14;
 
   ROW_H = 26;
 
@@ -74,13 +86,44 @@ const
   );
 
 type
-  TMenuTab = (tabServers, tabMaps, tabPlayer, tabGraphics);
+  TMenuTab = (tabServers, tabPlayer, tabMaps, tabSettings);
+  TSettingsPage = (spGraphics, spAudio, spControls);
 
   TSortColumn = (scName, scMode, scMap, scPlayers, scPing, scVersion, scCountry);
 
   TResolution = record
     w, h: Integer;
   end;
+
+  TBindAction = record
+    Command, Caption: string;
+  end;
+
+const
+  // actions shown in the controls tab, the same in both clients
+  BIND_ACTIONS: array[0..20] of TBindAction = (
+    (Command: '+left'; Caption: 'Move left'),
+    (Command: '+right'; Caption: 'Move right'),
+    (Command: '+jump'; Caption: 'Jump'),
+    (Command: '+crouch'; Caption: 'Crouch'),
+    (Command: '+prone'; Caption: 'Prone'),
+    (Command: '+jet'; Caption: 'Jets'),
+    (Command: '+fire'; Caption: 'Fire'),
+    (Command: '+reload'; Caption: 'Reload'),
+    (Command: '+changeweapon'; Caption: 'Change weapon'),
+    (Command: '+throwgrenade'; Caption: 'Throw grenade'),
+    (Command: '+dropweapon'; Caption: 'Drop weapon'),
+    (Command: '+chat'; Caption: 'Chat'),
+    (Command: '+teamchat'; Caption: 'Team chat'),
+    (Command: '+cmd'; Caption: 'Command line'),
+    (Command: '+radio'; Caption: 'Radio'),
+    (Command: '+weapons'; Caption: 'Weapons menu'),
+    (Command: '+fragslist'; Caption: 'Scoreboard'),
+    (Command: '+statsmenu'; Caption: 'Statistics'),
+    (Command: '+minimap'; Caption: 'Minimap'),
+    (Command: '+gamestats'; Caption: 'Game statistics'),
+    (Command: 'screenshot'; Caption: 'Screenshot')
+  );
 
 var
   // input state for the current frame
@@ -96,6 +139,7 @@ var
   DrawW, DrawH: Integer;
 
   Tab: TMenuTab = tabServers;
+  SettingsPage: TSettingsPage = spGraphics;
 
   // server browser
   Servers: TServerEntries;
@@ -115,13 +159,22 @@ var
   ListRequested: Boolean = False;
   LastPingSort: UInt32 = 0;
   Favorites: TStringList; // "ip:port" of servers starred by the player
+  Friends: TStringList; // nicknames
+  FriendText: WideString = '';
+  FriendsScroll: Integer = 0;
+  PlayersScroll: Integer = 0;
   LegacyText: WideString = '';
   LegacyProcess: TProcess;
   // server to join once the 1.7 client finished downloading
   PendingLegacyServer: TServerEntry;
   LegacyDownloadPending: Boolean = False;
+  // server the running 1.7 client joined
+  LegacyServer: TServerEntry;
+  // the 1.7 client opened its window (it takes a while to load)
+  LegacyWindowShown: Boolean = False;
+  LastWindowCheck: UInt32 = 0;
 
-  // map vote overlay for the 1.7 client, opened with F10 in game
+  // map vote overlay for the 1.7 client, opened with cl_mapvote_key in game
   MapVoteActive: Boolean = False;
   MapNames: TStringList;
   MapSearch: WideString = '';
@@ -145,6 +198,14 @@ var
   PreviewPlayer: TPlayer;
   PreviewTicks: Integer;
   PlayerDirty: Boolean;
+
+  // sound and controls
+  OptionsDirty: Boolean;
+  BindKeys: array of string; // per BIND_ACTIONS, '' = not bound
+  BindsLoaded: Boolean = False;
+  CaptureBind: Integer = -1; // action waiting for a key
+  CapturedKey: string = '';
+  CaptureClear: Boolean = False;
 
   // graphics (pending values, applied with the Apply button)
   Resolutions: array of TResolution;
@@ -614,6 +675,62 @@ begin
   end;
 end;
 
+procedure LoadFriends;
+begin
+  if Friends = nil then
+  begin
+    Friends := TStringList.Create;
+    Friends.Sorted := True;
+    Friends.Duplicates := dupIgnore;
+  end;
+
+  Friends.Clear;
+  try
+    if FileExists(UserDirectory + 'configs/' + FRIENDS_FILE) then
+      Friends.LoadFromFile(UserDirectory + 'configs/' + FRIENDS_FILE);
+  except
+    on E: Exception do
+      MenuStatus := WideString('Could not load friends: ' + E.Message);
+  end;
+end;
+
+function IsFriend(const Name: string): Boolean;
+begin
+  Result := Friends.IndexOf(Name) >= 0;
+end;
+
+procedure ToggleFriend(const Name: string);
+var
+  i: Integer;
+begin
+  if Trim(Name) = '' then
+    Exit;
+  i := Friends.IndexOf(Name);
+  if i >= 0 then
+    Friends.Delete(i)
+  else
+    Friends.Add(Trim(Name));
+
+  try
+    Friends.SaveToFile(UserDirectory + 'configs/' + FRIENDS_FILE);
+  except
+    on E: Exception do
+      MenuStatus := WideString('Could not save friends: ' + E.Message);
+  end;
+end;
+
+function FriendsOnServer(const s: TServerEntry): Integer;
+var
+  Names: TStringArray;
+  i: Integer;
+begin
+  Result := 0;
+  ServerPlayers(ServerKey(s), Names);
+  for i := 0 to High(Names) do
+    if IsFriend(Names[i]) then
+      Inc(Result);
+end;
+
 // unknown pings sort after all measured ones
 function PingSortValue(const s: TServerEntry): Integer;
 begin
@@ -668,6 +785,7 @@ begin
     1: if Empty then Exit;
     2: if Full then Exit;
     3: if Empty or Full then Exit;
+    4: if FriendsOnServer(s) = 0 then Exit;
   end;
 
   if (FilterMode <> '') and not SameText(s.GameStyle, FilterMode) then
@@ -777,6 +895,11 @@ end;
 
 procedure SelectServer(Index: Integer);
 begin
+  if (Index >= 0) and (Index <> SelectedServer) then
+  begin
+    RequestServerPlayers(Servers[Index]);
+    PlayersScroll := 0;
+  end;
   SelectedServer := Index;
   if Index >= 0 then
     AddressText := WideString(Servers[Index].IP + ':' + IntToStr(Servers[Index].Port));
@@ -795,6 +918,7 @@ end;
 
 function LaunchLegacyClient(const Server: TServerEntry): Boolean; forward;
 procedure LoadMapNames; forward;
+procedure WriteBinds(const Path: string); forward;
 
 // Shows the progress of the 1.7 client download and joins the server it
 // was started for once it finished.
@@ -831,12 +955,57 @@ end;
 
 procedure CheckLegacyProcess;
 begin
+  if (LegacyProcess <> nil) and not LegacyWindowShown and
+    (SDL_GetTicks - LastWindowCheck > 250) then
+  begin
+    LastWindowCheck := SDL_GetTicks;
+    LegacyWindowShown := OverlayWindowShown(LegacyProcess.ProcessID);
+  end;
+
   if (LegacyProcess = nil) or LegacyProcess.Running then
     Exit;
 
   if LegacyProcess.ExitStatus <> 0 then
     MenuStatus := WideFormat(_('The Soldat 1.7 client quit with an error (%d). Try joining again.'),
-      [LegacyProcess.ExitCode]);
+      [LegacyProcess.ExitCode])
+  else if MenuStatus = InfoStatus then
+    SetInfoStatus('');
+  FreeAndNil(LegacyProcess);
+
+  // the launcher was minimized while the game had the focus
+  SDL_RestoreWindow(GameWindow);
+  SDL_RaiseWindow(GameWindow);
+  OverlayActivate(GetProcessID);
+  OverlayStop;
+  MapVoteActive := False;
+end;
+
+function InGame: Boolean;
+begin
+  Result := LegacyProcess <> nil;
+end;
+
+// Closes the 1.7 client, forcibly when it doesn't quit within a second.
+procedure StopLegacyClient;
+var
+  i: Integer;
+begin
+  if LegacyProcess = nil then
+    Exit;
+
+  if LegacyProcess.Running then
+  begin
+    FpKill(LegacyProcess.ProcessID, SIGTERM);
+    for i := 1 to 50 do
+    begin
+      if not LegacyProcess.Running then
+        Break;
+      Sleep(20);
+    end;
+    if LegacyProcess.Running then
+      LegacyProcess.Terminate(0);
+  end;
+
   FreeAndNil(LegacyProcess);
   OverlayStop;
   MapVoteActive := False;
@@ -865,14 +1034,15 @@ end;
 // are kept.
 procedure SyncLegacyConfig(const ClientPath: string);
 const
-  SHARED_CVARS: array[0..23] of AnsiString = (
+  SHARED_CVARS: array[0..26] of AnsiString = (
     'cl_player_name', 'cl_player_shirt', 'cl_player_pants', 'cl_player_skin',
     'cl_player_hair', 'cl_player_jet', 'cl_player_hairstyle',
     'cl_player_headstyle', 'cl_player_chainstyle', 'cl_player_secwep',
     'r_fullscreen', 'r_screenwidth', 'r_screenheight', 'r_swapeffect',
     'r_fpslimit', 'r_maxfps', 'r_resizefilter', 'r_texturefilter',
     'r_mipmapping', 'r_smoothedges', 'r_weathereffects',
-    'r_renderbackground', 'r_scaleinterface', 'snd_volume'
+    'r_renderbackground', 'r_scaleinterface', 'snd_volume',
+    'snd_effects_battle', 'snd_effects_explosions', 'cl_sensitivity'
   );
 var
   Overrides: TStringList;
@@ -895,6 +1065,7 @@ begin
   finally
     Overrides.Free;
   end;
+  WriteBinds(ConfigPath);
 end;
 
 function LaunchLegacyClient(const Server: TServerEntry): Boolean;
@@ -934,9 +1105,15 @@ begin
 
   try
     LegacyProcess.Execute;
-    OverlayStart(LegacyProcess.ProcessID);
-    SetInfoStatus(WideFormat(_('Started the Soldat %s client for %s. Press F10 in game to change the map.'),
-      [WideString(Server.Version), WideString(Server.Name)]));
+    LegacyServer := Server;
+    LegacyWindowShown := False;
+    OverlayStart(LegacyProcess.ProcessID, cl_mapvote_key.Value);
+    if cl_mapvote_key.Value <> '' then
+      SetInfoStatus(WideFormat(_('Started the Soldat %s client for %s. Press %s in game to change the map.'),
+        [WideString(Server.Version), WideString(Server.Name), WideString(cl_mapvote_key.Value)]))
+    else
+      SetInfoStatus(WideFormat(_('Started the Soldat %s client for %s.'),
+        [WideString(Server.Version), WideString(Server.Name)]));
     Result := True;
   except
     on E: Exception do
@@ -1009,12 +1186,161 @@ begin
   RequestJoin;
 end;
 
+// Players of the selected server and the friends list, next to the servers.
+procedure DrawPlayersPanel(PX, PY, PW, PH: Single);
+const
+  RH = 24;
+  PLAYER_ROWS = 7;
+  FRIENDS_Y = 206; // from the top of the panel
+var
+  Names: TStringArray;
+  Fetched, Hover: Boolean;
+  i, j, n, Rows: Integer;
+  y: Single;
+  FriendNames: array of string;
+  FriendServer: array of Integer; // index into Servers, -1 = offline
+  Name: string;
+
+  // star toggling the friend, returns True when clicked
+  function FriendStar(x, y: Single; IsOn: Boolean): Boolean;
+  begin
+    Result := MouseClicked and Inside(x - 10, y, 22, RH);
+    DrawStar(x, y + RH / 2, 7, Color(Choose(IsOn, C_FRIEND,
+      Choose(Inside(x - 10, y, 22, RH), C_TEXT, $4A5540))));
+  end;
+
+begin
+  FillRect(PX, PY, PW, PH, Color(C_PANEL, 230));
+  StrokeRect(PX, PY, PW, PH, Color(C_PANEL_LINE));
+
+  // players of the selected server
+  FillRect(PX + 1, PY + 1, PW - 2, 30, Color($2A3220));
+  Names := nil;
+  Fetched := False;
+  if SelectedServer >= 0 then
+    Fetched := ServerPlayers(ServerKey(Servers[SelectedServer]), Names);
+  if Fetched then
+    DrawText(WideFormat(_('Players (%d)'), [Length(Names)]), PX + 10, PY, Color(C_TEXT_DIM), 15, 30)
+  else
+    DrawText(_('Players'), PX + 10, PY, Color(C_TEXT_DIM), 15, 30);
+
+  y := PY + 34;
+  if SelectedServer < 0 then
+    DrawText(FitText(_('Select a server to see who plays'), PW - 20, 14), PX + 10, y, Color(C_TEXT_DIM), 14, RH)
+  else if not Fetched then
+    DrawText(_('Loading...'), PX + 10, y, Color(C_TEXT_DIM), 14, RH)
+  else if Length(Names) = 0 then
+    DrawText(_('Nobody plays here'), PX + 10, y, Color(C_TEXT_DIM), 14, RH)
+  else
+  begin
+    if Inside(PX, y, PW, PLAYER_ROWS * RH) then
+      PlayersScroll := PlayersScroll - WheelDelta;
+    PlayersScroll := EnsureRange(PlayersScroll, 0, Max(0, Length(Names) - PLAYER_ROWS));
+
+    for i := PlayersScroll to Min(High(Names), PlayersScroll + PLAYER_ROWS - 1) do
+    begin
+      if FriendStar(PX + 16, y, IsFriend(Names[i])) then
+        ToggleFriend(Names[i]);
+      DrawText(FitText(WideString(Names[i]), PW - 50, 15), PX + 32, y,
+        Color(Choose(IsFriend(Names[i]), C_FRIEND, C_TEXT)), 15, RH);
+      y := y + RH;
+    end;
+
+    // scrollbar
+    if Length(Names) > PLAYER_ROWS then
+      FillRect(PX + PW - 6, PY + 34 + (PLAYER_ROWS * RH - PLAYER_ROWS * RH * PLAYER_ROWS / Length(Names)) *
+        PlayersScroll / (Length(Names) - PLAYER_ROWS), 4,
+        PLAYER_ROWS * RH * PLAYER_ROWS / Length(Names), Color(C_PANEL_LINE));
+  end;
+
+  // friends, the ones playing first
+  FriendNames := nil;
+  FriendServer := nil;
+  for i := 0 to High(Servers) do
+  begin
+    ServerPlayers(ServerKey(Servers[i]), Names);
+    for j := 0 to High(Names) do
+      if IsFriend(Names[j]) then
+      begin
+        FriendNames := Concat(FriendNames, [Names[j]]);
+        FriendServer := Concat(FriendServer, [i]);
+      end;
+  end;
+  n := Length(FriendNames);
+  for i := 0 to Friends.Count - 1 do
+  begin
+    Name := Friends[i];
+    Fetched := False;
+    for j := 0 to n - 1 do
+      if SameText(FriendNames[j], Name) then
+        Fetched := True;
+    if not Fetched then
+    begin
+      FriendNames := Concat(FriendNames, [Name]);
+      FriendServer := Concat(FriendServer, [-1]);
+    end;
+  end;
+
+  y := PY + FRIENDS_Y;
+  FillRect(PX + 1, y, PW - 2, 30, Color($2A3220));
+  DrawText(_('Friends'), PX + 10, y, Color(C_TEXT_DIM), 15, 30);
+  y := y + 34;
+
+  Rows := Floor((PH - FRIENDS_Y - 34 - 40) / RH);
+  if Inside(PX, y, PW, Rows * RH) then
+    FriendsScroll := FriendsScroll - WheelDelta;
+  FriendsScroll := EnsureRange(FriendsScroll, 0, Max(0, Length(FriendNames) - Rows));
+
+  if Length(FriendNames) = 0 then
+    DrawText(FitText(_('Star a player to add a friend'), PW - 20, 14), PX + 10, y,
+      Color(C_TEXT_DIM), 14, RH);
+
+  for i := FriendsScroll to Min(High(FriendNames), FriendsScroll + Rows - 1) do
+  begin
+    Hover := (FriendServer[i] >= 0) and Inside(PX + 28, y, PW - 30, RH);
+    if Hover then
+      FillRect(PX + 1, y, PW - 2, RH, Color(C_HOVER));
+
+    if FriendStar(PX + 16, y, True) then
+    begin
+      ToggleFriend(FriendNames[i]);
+      Break;
+    end;
+
+    if FriendServer[i] >= 0 then
+    begin
+      DrawText(FitText(WideString(FriendNames[i]), (PW - 40) / 2, 15), PX + 32, y,
+        Color(C_FRIEND), 15, RH);
+      DrawText(FitText(WideString(Servers[FriendServer[i]].Name), (PW - 40) / 2 - 8, 13),
+        PX + 40 + (PW - 40) / 2, y, Color(C_TEXT_DIM), 13, RH);
+      if Hover and MouseClicked then
+      begin
+        PlaySound(SFX_MENUCLICK);
+        SelectServer(FriendServer[i]);
+      end;
+    end
+    else
+      DrawText(FitText(WideString(FriendNames[i]), PW - 44, 15), PX + 32, y,
+        Color(C_TEXT_DIM), 15, RH);
+    y := y + RH;
+  end;
+
+  if TextField(ID_FRIEND, FriendText, PX + 8, PY + PH - 36, PW - 16, 28, 24,
+    _('Add friend by nickname')) and (Trim(FriendText) <> '') then
+  begin
+    if not IsFriend(UTF8Encode(Trim(FriendText))) then
+      ToggleFriend(UTF8Encode(Trim(FriendText)));
+    FriendText := '';
+  end;
+end;
+
 procedure DrawServersTab;
 const
   LIST_X = 40;
   LIST_Y = 200;
-  LIST_W = 1200;
+  LIST_W = 920;
   LIST_H = 392;
+  FULL_W = 1200; // list and players panel
   HEADER_H = 30;
   FILTER_Y = 142;
   FILTER_W = 144;
@@ -1122,11 +1448,12 @@ begin
   // filters, same as on the lobby website
   StringFilter(0, _('Game mode'), ModeOptions, FilterMode);
 
-  SetLength(Items, 4);
+  SetLength(Items, 5);
   Items[0] := _('All');
   Items[1] := _('Not empty');
   Items[2] := _('Not full');
   Items[3] := _('Not empty or full');
+  Items[4] := _('With friends');
   i := FilterSelector(_('Players'), Items, FilterPlayers, LIST_X + FILTER_STEP, FILTER_Y,
     FILTER_W, FilterPlayers <> 0);
   if i <> FilterPlayers then
@@ -1155,8 +1482,12 @@ begin
   end;
 
   if Button(Choose(Status = slsLoading, _('Loading...'), _('Refresh')),
-    LIST_X + LIST_W - 140, 92, 140, 34, False, Status <> slsLoading) then
+    LIST_X + FULL_W - 140, 92, 140, 34, False, Status <> slsLoading) then
+  begin
     RefreshServerList;
+    if SelectedServer >= 0 then
+      RequestServerPlayers(Servers[SelectedServer]);
+  end;
 
   TotalPlayers := 0;
   Index := 0;
@@ -1168,16 +1499,16 @@ begin
   Info := WideFormat(_('%d servers (%d for v%s), %d players online'),
     [Length(Servers), Index, WideString(MajorMinor(SOLDAT_VERSION)), TotalPlayers]);
   SetFont(15);
-  DrawText(Info, LIST_X + LIST_W - 160 - TextWidth(Info), 92, Color(C_TEXT_DIM), 15, 34);
+  DrawText(Info, LIST_X + FULL_W - 160 - TextWidth(Info), 92, Color(C_TEXT_DIM), 15, 34);
 
   // table
-  SetColumn(0, _('Name'), scName, LIST_X + 40, 380);
-  SetColumn(1, _('Mode'), scMode, LIST_X + 430, 80);
-  SetColumn(2, _('Map'), scMap, LIST_X + 520, 240);
-  SetColumn(3, _('Players'), scPlayers, LIST_X + 770, 110);
-  SetColumn(4, _('Ping'), scPing, LIST_X + 890, 80);
-  SetColumn(5, _('Version'), scVersion, LIST_X + 980, 100);
-  SetColumn(6, _('Country'), scCountry, LIST_X + 1090, 90);
+  SetColumn(0, _('Name'), scName, LIST_X + 40, 270);
+  SetColumn(1, _('Mode'), scMode, LIST_X + 315, 65);
+  SetColumn(2, _('Map'), scMap, LIST_X + 385, 165);
+  SetColumn(3, _('Players'), scPlayers, LIST_X + 555, 105);
+  SetColumn(4, _('Ping'), scPing, LIST_X + 665, 60);
+  SetColumn(5, _('Version'), scVersion, LIST_X + 730, 85);
+  SetColumn(6, _('Country'), scCountry, LIST_X + 820, 90);
 
   FillRect(LIST_X, LIST_Y, LIST_W, LIST_H, Color(C_PANEL, 230));
   StrokeRect(LIST_X, LIST_Y, LIST_W, LIST_H, Color(C_PANEL_LINE));
@@ -1268,6 +1599,10 @@ begin
       end;
     end;
 
+    // friends play here
+    if FriendsOnServer(s) > 0 then
+      FillRect(Columns[0].x - 10, y + ROW_H / 2 - 3, 6, 6, Color(C_FRIEND));
+
     Info := WideString(s.Name);
     if s.IsPrivate then
       Info := '[P] ' + Info;
@@ -1327,6 +1662,8 @@ begin
       LIST_W, LIST_H - HEADER_H, Color(Choose(Status = slsError, C_ERROR, C_TEXT_DIM)));
   end;
 
+  DrawPlayersPanel(LIST_X + LIST_W + 16, LIST_Y, FULL_W - LIST_W - 16, LIST_H);
+
   // connect bar
   y := LIST_Y + LIST_H + 16;
   DrawText(_('Address'), LIST_X, y, Color(C_TEXT_DIM), 16, 38);
@@ -1339,7 +1676,7 @@ begin
       _('Required'), _('Optional')), True) then
     JoinAddress;
 
-  if Button(_('Connect'), LIST_X + LIST_W - 260, y, 260, 38, True, AddressText <> '') then
+  if Button(_('Connect'), LIST_X + FULL_W - 260, y, 260, 38, True, AddressText <> '') then
     JoinAddress;
 
   // client used for servers with the old protocol
@@ -1466,7 +1803,7 @@ end;
 
 procedure OpenMapVote;
 begin
-  if MapVoteActive or (LegacyProcess = nil) then
+  if MapVoteActive or (LegacyProcess = nil) or not LegacyWindowShown then
     Exit;
 
   MapVoteActive := True;
@@ -1520,7 +1857,11 @@ begin
   StrokeRect(PX, PY, PW, PH, Color(C_ACCENT));
 
   DrawText(_('Change map'), PX + 24, PY + 12, Color(C_ACCENT), 22, 32, True);
-  DrawText(_('F10 or Esc to go back to the game'), PX + 300, PY + 12, Color(C_TEXT_DIM), 14, 32);
+  if cl_mapvote_key.Value <> '' then
+    DrawText(WideFormat(_('%s or Esc to go back to the game'), [WideString(cl_mapvote_key.Value)]),
+      PX + 300, PY + 12, Color(C_TEXT_DIM), 14, 32)
+  else
+    DrawText(_('Esc to go back to the game'), PX + 300, PY + 12, Color(C_TEXT_DIM), 14, 32);
 
   TextField(ID_MAPSEARCH, MapSearch, PX + 24, PY + 56, PW - 48, 34, 64, _('Search map'));
 
@@ -2107,14 +2448,16 @@ begin
     WindowResized := False;
   end;
 
-  if not (PlayerDirty or GraphicsDirty) then
+  if not (PlayerDirty or GraphicsDirty or OptionsDirty) then
     Exit;
 
-  SetLength(Names, Length(PLAYER_CVARS) + Length(GRAPHICS_CVARS));
+  SetLength(Names, Length(PLAYER_CVARS) + Length(GRAPHICS_CVARS) + Length(OPTION_CVARS));
   for i := 0 to High(PLAYER_CVARS) do
     Names[i] := PLAYER_CVARS[i];
   for i := 0 to High(GRAPHICS_CVARS) do
     Names[Length(PLAYER_CVARS) + i] := GRAPHICS_CVARS[i];
+  for i := 0 to High(OPTION_CVARS) do
+    Names[Length(PLAYER_CVARS) + Length(GRAPHICS_CVARS) + i] := OPTION_CVARS[i];
 
   // MSAA can only be set at startup, so it only goes to the file
   Overrides := TStringList.Create;
@@ -2127,6 +2470,7 @@ begin
 
   PlayerDirty := False;
   GraphicsDirty := False;
+  OptionsDirty := False;
 end;
 
 procedure ApplyGraphics;
@@ -2376,6 +2720,406 @@ begin
 end;
 
 {******************************************************************************}
+{*                              In-game screen                                *}
+{******************************************************************************}
+
+// Shown instead of the launcher while the 1.7 client runs.
+procedure DrawInGame;
+const
+  PX = 340;
+  PY = 150;
+  PW = 600;
+  PH = 400;
+var
+  y: Single;
+begin
+  FillRect(PX, PY, PW, PH, Color(C_PANEL, 235));
+  StrokeRect(PX, PY, PW, PH, Color(C_PANEL_LINE));
+
+  DrawText(Choose(LegacyWindowShown, _('In game'), _('Starting the game...')),
+    PX + 24, PY + 16, Color(C_ACCENT), 22, 32, True);
+  DrawText(FitText(WideString(LegacyServer.Name), PW - 48, 20), PX + 24, PY + 62,
+    Color(C_TEXT), 20, 30);
+  DrawText(FitText(WideFormat('%s  |  %s:%d  |  Soldat %s', [WideString(LegacyServer.GameStyle),
+    WideString(LegacyServer.IP), LegacyServer.Port, WideString(LegacyServer.Version)]), PW - 48, 15),
+    PX + 24, PY + 94, Color(C_TEXT_DIM), 15, 24);
+
+  y := PY + 144;
+  if not LegacyWindowShown then
+  begin
+    DrawText(WideFormat(_('Soldat %s is loading, it joins the server by itself.'),
+      [WideString(LegacyServer.Version)]), PX + 24, y, Color(C_TEXT_DIM), 16, 30);
+    if Button(_('Cancel'), PX + 24, y + 54, PW - 48, 42) then
+    begin
+      StopLegacyClient;
+      SetInfoStatus('');
+    end;
+    Exit;
+  end;
+
+  if Button(_('Back to game'), PX + 24, y, PW - 48, 42, True) then
+    OverlayActivate(LegacyProcess.ProcessID);
+  y := y + 54;
+  if Button(Choose(cl_mapvote_key.Value <> '', WideFormat(_('Change map (%s)'),
+    [WideString(cl_mapvote_key.Value)]), _('Change map')), PX + 24, y, PW - 48, 42) then
+    OpenMapVote;
+  y := y + 54;
+  if Button(_('Leave server'), PX + 24, y, PW - 48, 42) then
+  begin
+    StopLegacyClient;
+    SetInfoStatus(WideFormat(_('Left %s.'), [WideString(LegacyServer.Name)]));
+  end;
+
+  DrawText(FitText(_('The server list and settings come back after leaving the server.'), PW - 48, 14),
+    PX + 24, PY + PH - 48, Color(C_TEXT_DIM), 14, 28);
+end;
+
+{******************************************************************************}
+{*                                 Audio tab                                  *}
+{******************************************************************************}
+
+procedure DrawAudioTab;
+const
+  GX = 240;
+  GW = 800;
+  ROW = 36;
+var
+  Items: array of WideString;
+  y: Single;
+  v: Integer;
+
+  procedure Toggle(const Caption: WideString; Cvar: TBooleanCvar);
+  var
+    Value: Boolean;
+  begin
+    Value := Selector(Caption, Items, Ord(Cvar.Value), GX, y, GW) = 1;
+    if Value <> Cvar.Value then
+    begin
+      Cvar.SetValue(Value);
+      OptionsDirty := True;
+    end;
+    y := y + ROW;
+  end;
+
+begin
+  FillRect(GX - 30, 90, GW + 60, 280, Color(C_PANEL, 230));
+  StrokeRect(GX - 30, 90, GW + 60, 280, Color(C_PANEL_LINE));
+
+  y := 100;
+  DrawText(_('Sound'), GX, y, Color(C_ACCENT), 20, 30, True);
+  FillRect(GX, y + 32, GW, 1, Color(C_PANEL_LINE));
+  y := y + 42;
+
+  DrawText(_('Volume'), GX, y, Color(C_TEXT_DIM), 16, 30);
+  v := Slider(ID_VOLUME, '', snd_volume.Value, 100, GX + 210, y + 4, GW - 260, C_ACCENT);
+  if v <> snd_volume.Value then
+  begin
+    snd_volume.SetValue(v);
+    OptionsDirty := True;
+  end;
+  y := y + ROW + 4;
+
+  SetLength(Items, 2);
+  Items[0] := _('Off');
+  Items[1] := _('On');
+  Toggle(_('Distant battle'), snd_effects_battle);
+  Toggle(_('Ear ringing'), snd_effects_explosions);
+
+  DrawText(_('Distant battle: echo of far away shots and explosions.'), GX, y + 8,
+    Color(C_TEXT_DIM), 14, 24);
+  DrawText(_('Ear ringing: after a grenade explodes close to you.'), GX, y + 32,
+    Color(C_TEXT_DIM), 14, 24);
+  DrawText(_('Used by both game clients.'), GX, y + 56, Color(C_TEXT_DIM), 14, 24);
+
+  // a dragged slider is saved once released
+  if OptionsDirty and not MouseDown then
+    SaveSettings;
+end;
+
+{******************************************************************************}
+{*                               Controls tab                                 *}
+{******************************************************************************}
+
+// Next word or "quoted text" of Line from position p.
+function NextToken(const Line: string; var p: Integer): string;
+begin
+  Result := '';
+  while (p <= Length(Line)) and (Line[p] = ' ') do
+    Inc(p);
+  if p > Length(Line) then
+    Exit;
+
+  if Line[p] = '"' then
+  begin
+    Inc(p);
+    while (p <= Length(Line)) and (Line[p] <> '"') do
+    begin
+      Result := Result + Line[p];
+      Inc(p);
+    end;
+    Inc(p);
+  end
+  else
+    while (p <= Length(Line)) and (Line[p] <> ' ') do
+    begin
+      Result := Result + Line[p];
+      Inc(p);
+    end;
+end;
+
+// Splits a config line like: bind "A" "+left"
+function ParseBind(Line: string; out Key, Command: string): Boolean;
+var
+  p: Integer;
+begin
+  Line := Trim(Line);
+  p := 1;
+  Result := LowerCase(NextToken(Line, p)) = 'bind';
+  if Result then
+  begin
+    Key := NextToken(Line, p);
+    Command := NextToken(Line, p);
+    Result := (Key <> '') and (Command <> '');
+  end;
+end;
+
+function BindActionIndex(const Command: string): Integer;
+var
+  i: Integer;
+begin
+  Result := -1;
+  for i := 0 to High(BIND_ACTIONS) do
+    if SameText(Command, BIND_ACTIONS[i].Command) then
+      Exit(i);
+end;
+
+procedure LoadBinds;
+var
+  Lines: TStringList;
+  Key, Command: string;
+  i, a: Integer;
+begin
+  SetLength(BindKeys, Length(BIND_ACTIONS));
+  for i := 0 to High(BindKeys) do
+    BindKeys[i] := '';
+
+  Lines := TStringList.Create;
+  try
+    if FileExists(UserDirectory + 'configs/' + CONFIG_FILE) then
+      Lines.LoadFromFile(UserDirectory + 'configs/' + CONFIG_FILE);
+    for i := 0 to Lines.Count - 1 do
+      if ParseBind(Lines[i], Key, Command) then
+      begin
+        a := BindActionIndex(Command);
+        if (a >= 0) and (BindKeys[a] = '') then
+          BindKeys[a] := Key;
+      end;
+  finally
+    Lines.Free;
+  end;
+  BindsLoaded := True;
+end;
+
+// Replaces the binds of the actions (and other binds of the same keys) in a
+// config file with BindKeys.
+procedure WriteBinds(const Path: string);
+var
+  Lines: TStringList;
+  Key, Command: string;
+  i, a, InsertAt: Integer;
+  Replaced: Boolean;
+begin
+  if not FileExists(Path) then
+    Exit;
+  if not BindsLoaded then
+    LoadBinds;
+
+  Lines := TStringList.Create;
+  try
+    Lines.LoadFromFile(Path);
+    InsertAt := -1;
+    for i := Lines.Count - 1 downto 0 do
+      if ParseBind(Lines[i], Key, Command) then
+      begin
+        Replaced := BindActionIndex(Command) >= 0;
+        for a := 0 to High(BindKeys) do
+          if SameText(Key, BindKeys[a]) then
+            Replaced := True;
+        if Replaced then
+        begin
+          Lines.Delete(i);
+          InsertAt := i;
+        end;
+      end;
+
+    if InsertAt < 0 then
+      InsertAt := Lines.Count;
+    for a := High(BIND_ACTIONS) downto 0 do
+      if BindKeys[a] <> '' then
+        Lines.Insert(InsertAt, 'bind "' + BindKeys[a] + '" "' + BIND_ACTIONS[a].Command + '"');
+    Lines.SaveToFile(Path);
+  finally
+    Lines.Free;
+  end;
+end;
+
+// Saves the binds and makes the game use them.
+procedure ApplyBinds;
+var
+  Lines: TStringList;
+  Key, Command: string;
+  i: Integer;
+begin
+  WriteBinds(UserDirectory + 'configs/' + CONFIG_FILE);
+
+  Lines := TStringList.Create;
+  try
+    Lines.LoadFromFile(UserDirectory + 'configs/' + CONFIG_FILE);
+    UnbindAll;
+    for i := 0 to Lines.Count - 1 do
+      if ParseBind(Lines[i], Key, Command) then
+        ParseInput(Trim(Lines[i]));
+  finally
+    Lines.Free;
+  end;
+end;
+
+procedure DrawControlsTab;
+const
+  GX = 260;
+  GW = 950;
+  ROW = 34;
+  COL_W = 440;
+  KEY_W = 220;
+  MAP_KEY_ROW = Length(BIND_ACTIONS);
+var
+  Key: string;
+  i, a, Half, v: Integer;
+  x, y, Top: Single;
+  Caption: WideString;
+  Capturing: Boolean;
+begin
+  if not BindsLoaded then
+    LoadBinds;
+
+  // a key was pressed for the map vote of the 1.7 client
+  if (CaptureBind = MAP_KEY_ROW) and (CapturedKey <> '') then
+  begin
+    if CaptureClear then
+      cl_mapvote_key.SetValue('')
+    else if OverlayKeyKnown(CapturedKey) then
+    begin
+      // the game wouldn't get the key any more
+      for a := 0 to High(BindKeys) do
+        if SameText(BindKeys[a], CapturedKey) then
+          BindKeys[a] := '';
+      ApplyBinds;
+      cl_mapvote_key.SetValue(CapturedKey);
+    end
+    else
+      MenuStatus := WideFormat(_('%s can''t open the map vote, pick a keyboard key.'),
+        [WideString(CapturedKey)]);
+    OptionsDirty := True;
+    SaveSettings;
+    CaptureBind := -1;
+    CapturedKey := '';
+    CaptureClear := False;
+  end;
+
+  // a key was pressed for the action waiting for one
+  if (CaptureBind >= 0) and (CapturedKey <> '') then
+  begin
+    if CaptureClear then
+      BindKeys[CaptureBind] := ''
+    else
+    begin
+      for a := 0 to High(BindKeys) do
+        if SameText(BindKeys[a], CapturedKey) then
+          BindKeys[a] := '';
+      BindKeys[CaptureBind] := CapturedKey;
+      if SameText(cl_mapvote_key.Value, CapturedKey) then
+      begin
+        cl_mapvote_key.SetValue('');
+        OptionsDirty := True;
+        SaveSettings;
+      end;
+    end;
+    CaptureBind := -1;
+    CapturedKey := '';
+    CaptureClear := False;
+    ApplyBinds;
+  end;
+
+  FillRect(GX - 30, 90, GW + 60, 560, Color(C_PANEL, 230));
+  StrokeRect(GX - 30, 90, GW + 60, 560, Color(C_PANEL_LINE));
+
+  y := 100;
+  DrawText(_('Mouse'), GX, y, Color(C_ACCENT), 20, 30, True);
+  FillRect(GX, y + 32, GW, 1, Color(C_PANEL_LINE));
+  y := y + 42;
+
+  DrawText(_('Sensitivity'), GX, y, Color(C_TEXT_DIM), 16, 30);
+  v := Slider(ID_SENSITIVITY, '', Round(cl_sensitivity.Value * 100), 100,
+    GX + 240, y + 4, GW - 300, C_ACCENT);
+  if v <> Round(cl_sensitivity.Value * 100) then
+  begin
+    cl_sensitivity.SetValue(v / 100);
+    OptionsDirty := True;
+  end;
+  if OptionsDirty and not MouseDown then
+    SaveSettings;
+  y := y + 48;
+
+  DrawText(_('Keys'), GX, y, Color(C_ACCENT), 20, 30, True);
+  FillRect(GX, y + 32, GW, 1, Color(C_PANEL_LINE));
+  Top := y + 42;
+
+  // the actions, then the map vote of the 1.7 client
+  Half := (MAP_KEY_ROW + 2) div 2;
+  for i := 0 to MAP_KEY_ROW do
+  begin
+    x := GX + (i div Half) * (COL_W + 40);
+    y := Top + (i mod Half) * ROW;
+    if i = MAP_KEY_ROW then
+    begin
+      DrawText(_('Change map (1.7)'), x, y, Color(C_TEXT_DIM), 16, ROW - 4);
+      Key := cl_mapvote_key.Value;
+    end
+    else
+    begin
+      DrawText(_(BIND_ACTIONS[i].Caption), x, y, Color(C_TEXT_DIM), 16, ROW - 4);
+      Key := BindKeys[i];
+    end;
+
+    Capturing := CaptureBind = i;
+    if Capturing then
+      Caption := _('Press a key...')
+    else if Key = '' then
+      Caption := '-'
+    else
+      Caption := WideString(Key);
+
+    x := x + COL_W - KEY_W;
+    FillRect(x, y, KEY_W, ROW - 4, Color(Choose(Capturing, C_SELECTED,
+      Choose(Inside(x, y, KEY_W, ROW - 4), C_HOVER, $11140D))));
+    StrokeRect(x, y, KEY_W, ROW - 4, Color(Choose(Capturing, C_ACCENT, C_PANEL_LINE)));
+    DrawTextCentered(FitText(Caption, KEY_W - 12, 15), x, y, KEY_W, ROW - 4,
+      Color(C_TEXT), 15);
+
+    if (CaptureBind < 0) and MouseClicked and Inside(x, y, KEY_W, ROW - 4) then
+    begin
+      PlaySound(SFX_MENUCLICK);
+      CaptureBind := i;
+      CapturedKey := '';
+    end;
+  end;
+
+  DrawText(FitText(_('Click an action, then press a key or mouse button. Esc cancels, ' +
+    'Delete removes the key. Used by both game clients.'), GW, 14),
+    GX, Top + Half * ROW + 6, Color(C_TEXT_DIM), 14, 24);
+end;
+
+{******************************************************************************}
 {*                                 Main loop                                  *}
 {******************************************************************************}
 
@@ -2427,7 +3171,7 @@ begin
         if Event.window.event = SDL_WINDOWEVENT_SIZE_CHANGED then
         begin
           HandleWindowResized(Event.window.data1, Event.window.data2);
-          if Tab = tabGraphics then
+          if (Tab = tabSettings) and (SettingsPage = spGraphics) then
             LoadPendingGraphics;
         end;
 
@@ -2441,7 +3185,9 @@ begin
       end;
 
       SDL_MOUSEBUTTONDOWN:
-        if Event.button.button = SDL_BUTTON_LEFT then
+        if CaptureBind >= 0 then
+          CapturedKey := 'MOUSE' + IntToStr(Event.button.button)
+        else if Event.button.button = SDL_BUTTON_LEFT then
         begin
           px := Event.button.x * DrawW / Max(1, ww);
           py := Event.button.y * DrawH / Max(1, wh);
@@ -2467,17 +3213,31 @@ begin
           WideString(UTF8String(RawByteString(PChar(@Event.text.text[0]))));
 
       SDL_KEYDOWN:
-      begin
-        Mods := Event.key.keysym._mod;
-        case Event.key.keysym.sym of
-          SDLK_BACKSPACE: KeyBackspace := True;
-          SDLK_RETURN, SDLK_KP_ENTER: KeyEnter := True;
-          SDLK_ESCAPE: KeyEscape := True;
-          SDLK_UP: KeyUp := True;
-          SDLK_DOWN: KeyDown := True;
-          SDLK_v: KeyPaste := (Mods and KMOD_CTRL) <> 0;
+        if CaptureBind >= 0 then
+        begin
+          case Event.key.keysym.sym of
+            SDLK_ESCAPE: CaptureBind := -1;
+            SDLK_DELETE:
+            begin
+              CaptureClear := True;
+              CapturedKey := '-';
+            end;
+          else
+            CapturedKey := string(SDL_GetScancodeName(Event.key.keysym.scancode));
+          end;
+        end
+        else
+        begin
+          Mods := Event.key.keysym._mod;
+          case Event.key.keysym.sym of
+            SDLK_BACKSPACE: KeyBackspace := True;
+            SDLK_RETURN, SDLK_KP_ENTER: KeyEnter := True;
+            SDLK_ESCAPE: KeyEscape := True;
+            SDLK_UP: KeyUp := True;
+            SDLK_DOWN: KeyDown := True;
+            SDLK_v: KeyPaste := (Mods and KMOD_CTRL) <> 0;
+          end;
         end;
-      end;
     end;
   end;
 end;
@@ -2502,7 +3262,7 @@ begin
     JoinAddress;
 end;
 
-procedure SwitchTab(NewTab: TMenuTab);
+procedure SwitchSettingsPage(NewPage: TSettingsPage);
 begin
   SaveSettings;
   if FocusId <> ID_NONE then
@@ -2510,10 +3270,56 @@ begin
   FocusId := ID_NONE;
   DragId := ID_NONE;
   GraphicsMessage := '';
-  Tab := NewTab;
+  CaptureBind := -1;
+  SettingsPage := NewPage;
 
-  if Tab = tabGraphics then
+  // the binds could have been changed from the console in game
+  if SettingsPage = spControls then
+    LoadBinds;
+  if SettingsPage = spGraphics then
     LoadPendingGraphics;
+end;
+
+procedure SwitchTab(NewTab: TMenuTab);
+begin
+  Tab := NewTab;
+  SwitchSettingsPage(SettingsPage);
+end;
+
+procedure DrawSettingsTab;
+const
+  NAV_X = 40;
+  NAV_W = 150;
+
+  procedure Page(const Caption: WideString; p: TSettingsPage; y: Single);
+  var
+    Hover: Boolean;
+  begin
+    Hover := Inside(NAV_X, y, NAV_W, 40);
+    if SettingsPage = p then
+    begin
+      FillRect(NAV_X, y, NAV_W, 40, Color(C_PANEL, 230));
+      FillRect(NAV_X, y, 3, 40, Color(C_ACCENT));
+    end;
+    DrawText(Caption, NAV_X + 16, y, Color(Choose((SettingsPage = p) or Hover, C_TEXT, C_TEXT_DIM)),
+      18, 40, True);
+    if Hover and MouseClicked and (SettingsPage <> p) then
+    begin
+      PlaySound(SFX_MENUCLICK);
+      SwitchSettingsPage(p);
+    end;
+  end;
+
+begin
+  Page(_('Graphics'), spGraphics, 90);
+  Page(_('Audio'), spAudio, 134);
+  Page(_('Controls'), spControls, 178);
+
+  case SettingsPage of
+    spGraphics: DrawGraphicsTab;
+    spAudio: DrawAudioTab;
+    spControls: DrawControlsTab;
+  end;
 end;
 
 procedure RenderMenu;
@@ -2541,17 +3347,21 @@ begin
   FillRect(-OffsetX / Scale, 0, DrawW / Scale, 72, Color($0B0D08, 200));
   FillRect(-OffsetX / Scale, 72, DrawW / Scale, 1, Color(C_PANEL_LINE));
   DrawText('SOLDAT', 40, -8, Color(C_ACCENT), 34, 72, True);
-  DrawText('okkindel remix', 42, 50, Color(C_TEXT_DIM), 13, 16);
+  DrawText(WideString('okkindel remix  r' + REMIX_VERSION), 42, 50, Color(C_TEXT_DIM), 13, 16);
 
-  x := 280;
-  if TabButton(_('Servers'), x, 14, 150, 58, Tab = tabServers) then
-    SwitchTab(tabServers);
-  if TabButton(_('Maps'), x + 160, 14, 150, 58, Tab = tabMaps) then
-    SwitchTab(tabMaps);
-  if TabButton(_('Player'), x + 320, 14, 150, 58, Tab = tabPlayer) then
-    SwitchTab(tabPlayer);
-  if TabButton(_('Graphics'), x + 480, 14, 150, 58, Tab = tabGraphics) then
-    SwitchTab(tabGraphics);
+  // the launcher pages are hidden while the 1.7 client runs
+  if not InGame then
+  begin
+    x := 280;
+    if TabButton(_('Servers'), x, 14, 150, 58, Tab = tabServers) then
+      SwitchTab(tabServers);
+    if TabButton(_('Player'), x + 160, 14, 150, 58, Tab = tabPlayer) then
+      SwitchTab(tabPlayer);
+    if TabButton(_('Maps'), x + 320, 14, 150, 58, Tab = tabMaps) then
+      SwitchTab(tabMaps);
+    if TabButton(_('Settings'), x + 480, 14, 150, 58, Tab = tabSettings) then
+      SwitchTab(tabSettings);
+  end;
 
   if Button(_('Quit'), DESIGN_W - 140, 18, 100, 36) then
   begin
@@ -2561,12 +3371,14 @@ begin
 
   if MapVoteActive then
     DrawMapVote
+  else if InGame then
+    DrawInGame
   else
     case Tab of
       tabServers: DrawServersTab;
-      tabMaps: DrawMapsTab;
       tabPlayer: DrawPlayerTab;
-      tabGraphics: DrawGraphicsTab;
+      tabMaps: DrawMapsTab;
+      tabSettings: DrawSettingsTab;
     end;
 
   // status line
@@ -2600,6 +3412,7 @@ var
 begin
   LoadFavorites;
   LoadFavoriteMaps;
+  LoadFriends;
 
   // maps (and their textures) the 1.7 client downloaded from servers, with
   // the lowest priority, for the map lists and previews
@@ -2672,7 +3485,7 @@ begin
     else if MapVoteActive and KeyEscape then
       CloseMapVote(True);
 
-    if not MapVoteActive then
+    if not (MapVoteActive or InGame) then
       HandleListKeys;
     CheckLegacyProcess;
     CheckLegacyDownload;
@@ -2685,6 +3498,9 @@ begin
   end;
 
   SaveSettings;
+  // quitting the launcher closes the 1.7 client as well
+  if QuitRequested then
+    StopLegacyClient;
   SDL_StopTextInput;
   SDL_ShowCursor(SDL_DISABLE);
 end;
@@ -2692,6 +3508,7 @@ end;
 finalization
   FreeAndNil(PreviewPlayer);
   FreeAndNil(Favorites);
+  FreeAndNil(Friends);
   FreeAndNil(LegacyProcess);
   FreeAndNil(MapNames);
   FreeAndNil(FavoriteMaps);

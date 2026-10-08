@@ -144,17 +144,20 @@ if(BUILD_CLIENT)
   if(ADD_ASSETS)
     file(READ ${CMAKE_SOURCE_DIR}/shared/Version.txt SOLDAT_VERSION_STRING)
     string(REGEX REPLACE "['\n\r ]" "" SOLDAT_VERSION_STRING "${SOLDAT_VERSION_STRING}")
+    file(READ ${CMAKE_SOURCE_DIR}/shared/RemixVersion.txt REMIX_VERSION_STRING)
+    string(REGEX REPLACE "['\n\r ]" "" REMIX_VERSION_STRING "${REMIX_VERSION_STRING}")
+    set(DEB_VERSION ${SOLDAT_VERSION_STRING}+1.7.1-r${REMIX_VERSION_STRING})
     # the game downloads the Soldat 1.7.1 client on first use
     add_custom_target(deb
       COMMAND sh ${CMAKE_SOURCE_DIR}/packaging/linux/build-deb.sh
-              ${EXECUTABLE_OUTPUT_PATH} ${CMAKE_BINARY_DIR} ${SOLDAT_VERSION_STRING}+1.7.1 0
+              ${EXECUTABLE_OUTPUT_PATH} ${CMAKE_BINARY_DIR} ${DEB_VERSION} 0
       DEPENDS soldat
       COMMENT "Building Debian package"
     )
     # with the Soldat 1.7.1 client included
     add_custom_target(deb-full
       COMMAND sh ${CMAKE_SOURCE_DIR}/packaging/linux/build-deb.sh
-              ${EXECUTABLE_OUTPUT_PATH} ${CMAKE_BINARY_DIR} ${SOLDAT_VERSION_STRING}+1.7.1 1
+              ${EXECUTABLE_OUTPUT_PATH} ${CMAKE_BINARY_DIR} ${DEB_VERSION} 1
       DEPENDS soldat
       COMMENT "Building Debian package with the Soldat 1.7.1 client"
     )
