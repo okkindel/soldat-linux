@@ -23,7 +23,8 @@ uses
   SDL2, SysUtils, Classes, Math, StrUtils,
   Gfx, Vector, Client, ClientGame, GameRendering, GostekGraphics, Sprites,
   Anims, Parts, Game, Net, Weapons, Constants, Cvar, Command, Input,
-  GameStrings, ServerList, Sound, Version, Process, PhysFS, LegacyOverlay;
+  GameStrings, ServerList, Sound, Version, Process, PhysFS, LegacyOverlay,
+  LegacyDownload, MapPreview;
 
 const
   // everything is laid out in a 1280x720 design space scaled to the window
@@ -32,12 +33,13 @@ const
 
   CONFIG_FILE = 'client.cfg';
   FAVORITES_FILE = 'favorites.txt';
+  FAVORITE_MAPS_FILE = 'favorite_maps.txt';
 
-  PLAYER_CVARS: array[0..11] of AnsiString = (
+  PLAYER_CVARS: array[0..10] of AnsiString = (
     'cl_player_name', 'cl_player_shirt', 'cl_player_pants', 'cl_player_skin',
     'cl_player_hair', 'cl_player_jet', 'cl_player_hairstyle',
     'cl_player_headstyle', 'cl_player_chainstyle', 'cl_player_secwep',
-    'cl_legacy_client', 'cl_mapvote_command'
+    'cl_legacy_client'
   );
 
   GRAPHICS_CVARS: array[0..14] of AnsiString = (
@@ -58,7 +60,7 @@ const
   ID_SLIDER_B    = 7;
   ID_LEGACY      = 8;
   ID_MAPSEARCH   = 9;
-  ID_MAPCOMMAND  = 10;
+  ID_MAPSTAB     = 11;
 
   ROW_H = 26;
 
@@ -72,7 +74,7 @@ const
   );
 
 type
-  TMenuTab = (tabServers, tabPlayer, tabGraphics);
+  TMenuTab = (tabServers, tabMaps, tabPlayer, tabGraphics);
 
   TSortColumn = (scName, scMode, scMap, scPlayers, scPing, scVersion, scCountry);
 
@@ -115,13 +117,23 @@ var
   Favorites: TStringList; // "ip:port" of servers starred by the player
   LegacyText: WideString = '';
   LegacyProcess: TProcess;
+  // server to join once the 1.7 client finished downloading
+  PendingLegacyServer: TServerEntry;
+  LegacyDownloadPending: Boolean = False;
 
   // map vote overlay for the 1.7 client, opened with F10 in game
   MapVoteActive: Boolean = False;
   MapNames: TStringList;
   MapSearch: WideString = '';
-  MapCommandText: WideString = '';
   MapScroll: Integer = 0;
+
+  // maps tab
+  FavoriteMaps: TStringList;
+  MapsSearch: WideString = '';
+  MapsScroll: Integer = 0;
+  SelectedMap: string = '';
+  MapPreviewData: TMapPreview;
+  PreviewName: string = '';
 
   // MenuStatus is shown as information (not as an error) while it equals this
   InfoStatus: WideString = '';
@@ -781,6 +793,42 @@ begin
   InfoStatus := Text;
 end;
 
+function LaunchLegacyClient(const Server: TServerEntry): Boolean; forward;
+procedure LoadMapNames; forward;
+
+// Shows the progress of the 1.7 client download and joins the server it
+// was started for once it finished.
+procedure CheckLegacyDownload;
+var
+  LegacyDir: string;
+begin
+  if not LegacyDownloadPending then
+    Exit;
+
+  case LegacyDownloadState of
+    ldsRunning:
+      SetInfoStatus(WideFormat(_('Downloading the Soldat 1.7.1 client from soldat.pl ' +
+        '(only once, about 180 MB): %d%%'), [LegacyDownloadProgress]));
+    ldsDone:
+      begin
+        LegacyDownloadPending := False;
+        LegacyDir := UserDirectory + 'legacy/';
+        LegacyText := '';
+        if DirectoryExists(LegacyDir + 'downloads') then
+          PHYSFS_mount(PChar(LegacyDir + 'downloads'), '/', True);
+        if MapNames <> nil then
+          LoadMapNames;
+        if not LaunchLegacyClient(PendingLegacyServer) then
+          MenuStatus := _('The Soldat 1.7.1 client was downloaded, but could not be started.');
+      end;
+    ldsFailed:
+      begin
+        LegacyDownloadPending := False;
+        MenuStatus := WideString('Could not download the Soldat 1.7.1 client: ' + LegacyDownloadError);
+      end;
+  end;
+end;
+
 procedure CheckLegacyProcess;
 begin
   if (LegacyProcess = nil) or LegacyProcess.Running then
@@ -912,10 +960,19 @@ begin
     not IsCompatible(Servers[SelectedServer]) then
   begin
     if not LaunchLegacyClient(Servers[SelectedServer]) then
-      MenuStatus := WideFormat(_('This server runs Soldat %s, which can''t be joined with ' +
-        'this game version (%s). Set the path to a Soldat %s client below to play there.'),
-        [WideString(Servers[SelectedServer].Version), WideString(SOLDAT_VERSION),
-         WideString(Servers[SelectedServer].Version)]);
+    begin
+      if Trim(cl_legacy_client.Value) = '' then
+      begin
+        // no client installed yet: fetch the official one, then join
+        PendingLegacyServer := Servers[SelectedServer];
+        LegacyDownloadPending := True;
+        StartLegacyDownload(UserDirectory + 'legacy');
+      end
+      else
+        MenuStatus := WideFormat(_('This server runs Soldat %s, which can''t be joined with ' +
+          'this game version (%s). The Soldat 1.7 client set below was not found.'),
+          [WideString(Servers[SelectedServer].Version), WideString(SOLDAT_VERSION)]);
+    end;
     Exit;
   end;
 
@@ -1348,6 +1405,65 @@ begin
   end;
 end;
 
+procedure LoadFavoriteMaps;
+begin
+  if FavoriteMaps = nil then
+  begin
+    FavoriteMaps := TStringList.Create;
+    FavoriteMaps.Sorted := True;
+    FavoriteMaps.Duplicates := dupIgnore;
+    FavoriteMaps.CaseSensitive := False;
+  end;
+  FavoriteMaps.Clear;
+  try
+    if FileExists(UserDirectory + 'configs/' + FAVORITE_MAPS_FILE) then
+      FavoriteMaps.LoadFromFile(UserDirectory + 'configs/' + FAVORITE_MAPS_FILE);
+  except
+    on E: Exception do
+      MenuStatus := WideString('Could not load favorite maps: ' + E.Message);
+  end;
+end;
+
+function IsFavoriteMap(const Map: string): Boolean;
+begin
+  Result := (FavoriteMaps <> nil) and (FavoriteMaps.IndexOf(Map) >= 0);
+end;
+
+procedure ToggleFavoriteMap(const Map: string);
+var
+  i: Integer;
+begin
+  i := FavoriteMaps.IndexOf(Map);
+  if i >= 0 then
+    FavoriteMaps.Delete(i)
+  else
+    FavoriteMaps.Add(Map);
+  try
+    FavoriteMaps.SaveToFile(UserDirectory + 'configs/' + FAVORITE_MAPS_FILE);
+  except
+    on E: Exception do
+      MenuStatus := WideString('Could not save favorite maps: ' + E.Message);
+  end;
+end;
+
+// Maps matching the search, favorites first.
+function FilterMaps(const SearchText: WideString): TStringArray;
+var
+  Search: string;
+  Pass, i: Integer;
+begin
+  Result := nil;
+  Search := LowerCase(Trim(UTF8Encode(SearchText)));
+  for Pass := 0 to 1 do
+    for i := 0 to MapNames.Count - 1 do
+      if (IsFavoriteMap(MapNames[i]) = (Pass = 0)) and
+        ((Search = '') or (Pos(Search, LowerCase(MapNames[i])) > 0)) then
+      begin
+        SetLength(Result, Length(Result) + 1);
+        Result[High(Result)] := MapNames[i];
+      end;
+end;
+
 procedure OpenMapVote;
 begin
   if MapVoteActive or (LegacyProcess = nil) then
@@ -1357,7 +1473,6 @@ begin
   LoadMapNames;
   MapSearch := '';
   MapScroll := 0;
-  MapCommandText := WideString(cl_mapvote_command.Value);
   FocusId := ID_MAPSEARCH;
   SDL_StartTextInput;
 
@@ -1377,27 +1492,13 @@ begin
 end;
 
 procedure SendMapVote(const Map: string);
-var
-  Command: string;
 begin
-  if UTF8Encode(MapCommandText) <> cl_mapvote_command.Value then
-    if cl_mapvote_command.SetValue(UTF8Encode(MapCommandText)) then
-    begin
-      PlayerDirty := True;
-      SaveSettings;
-    end;
-
-  Command := cl_mapvote_command.Value;
-  if Pos('%s', Command) > 0 then
-    Command := StringReplace(Command, '%s', Map, [])
+  CloseMapVote(True);
+  // "/" opens the command line of the game
+  if OverlayTypeInGame('votemap ' + Map, '/') then
+    SetInfoStatus(WideFormat(_('Voted for %s, see the chat of the game.'), [WideString(Map)]))
   else
-    Command := Command + ' ' + Map;
-
-  CloseMapVote(False);
-  if OverlayTypeInGame(Command) then
-    SetInfoStatus(WideFormat(_('Typed "%s" into the game chat.'), [WideString(Command)]))
-  else
-    MenuStatus := _('Could not type into the game. Is the Soldat 1.7 client still running?');
+    MenuStatus := _('Could not type the map vote into the Soldat 1.7 client.');
 end;
 
 procedure DrawMapVote;
@@ -1411,9 +1512,8 @@ const
   CELL_H = 30;
   VISIBLE_ROWS = 12;
 var
-  Filtered: array of string;
-  Search: string;
-  i, n, Row, Col, Rows: Integer;
+  Filtered: TStringArray;
+  n, Row, Col, Rows: Integer;
   x, y: Single;
 begin
   FillRect(PX, PY, PW, PH, Color(C_PANEL, 245));
@@ -1422,18 +1522,9 @@ begin
   DrawText(_('Change map'), PX + 24, PY + 12, Color(C_ACCENT), 22, 32, True);
   DrawText(_('F10 or Esc to go back to the game'), PX + 300, PY + 12, Color(C_TEXT_DIM), 14, 32);
 
-  TextField(ID_MAPSEARCH, MapSearch, PX + 24, PY + 56, 420, 34, 64, _('Search map'));
-  DrawText(_('Command'), PX + 470, PY + 56, Color(C_TEXT_DIM), 15, 34);
-  TextField(ID_MAPCOMMAND, MapCommandText, PX + 580, PY + 56, 276, 34, 128, '!map %s');
+  TextField(ID_MAPSEARCH, MapSearch, PX + 24, PY + 56, PW - 48, 34, 64, _('Search map'));
 
-  Search := LowerCase(Trim(UTF8Encode(MapSearch)));
-  SetLength(Filtered, 0);
-  for i := 0 to MapNames.Count - 1 do
-    if (Search = '') or (Pos(Search, LowerCase(MapNames[i])) > 0) then
-    begin
-      SetLength(Filtered, Length(Filtered) + 1);
-      Filtered[High(Filtered)] := MapNames[i];
-    end;
+  Filtered := FilterMaps(MapSearch);
 
   // list in columns, scrolled by rows
   Rows := (Length(Filtered) + COLS - 1) div COLS;
@@ -1459,7 +1550,9 @@ begin
           Exit;
         end;
       end;
-      DrawText(FitText(WideString(Filtered[n]), CELL_W - 20, 15), x + 8, y, Color(C_TEXT), 15, CELL_H - 2);
+      if IsFavoriteMap(Filtered[n]) then
+        DrawStar(x + 12, y + CELL_H / 2, 7, Color($F1C40F));
+      DrawText(FitText(WideString(Filtered[n]), CELL_W - 36, 15), x + 24, y, Color(C_TEXT), 15, CELL_H - 2);
     end;
 
   if Length(Filtered) = 0 then
@@ -1474,12 +1567,152 @@ begin
 
   // footer: hint above, count and button below
   FillRect(PX + 24, PY + PH - 98, PW - 48, 1, Color(C_PANEL_LINE));
-  DrawText(FitText(_('The command is typed into the game chat (chat key T). It works on servers ' +
-    'with a map command, like !map.'), PW - 48, 13), PX + 24, PY + PH - 90, Color(C_TEXT_DIM), 13, 24);
+  DrawText(FitText(_('Picking a map starts a map vote on the server, like the vote menu of the game.'),
+    PW - 48, 13), PX + 24, PY + PH - 90, Color(C_TEXT_DIM), 13, 24);
   DrawText(WideFormat(_('%d maps'), [Length(Filtered)]), PX + 24, PY + PH - 50,
     Color(C_TEXT_DIM), 14, 32);
   if Button(_('Cancel'), PX + PW - 144, PY + PH - 50, 120, 32) then
     CloseMapVote(True);
+end;
+
+{******************************************************************************}
+{*                                 Maps tab                                   *}
+{******************************************************************************}
+
+const
+  PREVIEW_W = 1024;
+  PREVIEW_H = 585;
+
+// Renders the preview of the selected map when it changed. Must run outside
+// of RenderMenu, it uses its own render target.
+procedure UpdateMapPreview;
+begin
+  if (Tab <> tabMaps) or (SelectedMap = PreviewName) then
+    Exit;
+  FreeMapPreview(MapPreviewData);
+  PreviewName := SelectedMap;
+  if SelectedMap <> '' then
+    MapPreviewData := RenderMapPreview(SelectedMap, PREVIEW_W, PREVIEW_H);
+end;
+
+procedure DrawMapsTab;
+const
+  LX = 40;
+  LY = 140;
+  LW = 400;
+  ROW = 26;
+  VISIBLE = 20;
+  RX = 470;
+  RW = 770;
+  RH = 440;
+var
+  Filtered: TStringArray;
+  i, n: Integer;
+  x, y, u, v: Single;
+  White: TGfxColor;
+  Details, Spawns: WideString;
+begin
+  if MapNames = nil then
+    LoadMapNames;
+
+  TextField(ID_MAPSTAB, MapsSearch, LX, 92, LW, 34, 64, _('Search map'));
+  Filtered := FilterMaps(MapsSearch);
+
+  if (SelectedMap = '') and (Length(Filtered) > 0) then
+    SelectedMap := Filtered[0];
+
+  // list
+  FillRect(LX, LY, LW, VISIBLE * ROW + 4, Color(C_PANEL, 230));
+  StrokeRect(LX, LY, LW, VISIBLE * ROW + 4, Color(C_PANEL_LINE));
+
+  if Inside(LX, LY, LW, VISIBLE * ROW) then
+    MapsScroll := MapsScroll - WheelDelta * 3;
+  MapsScroll := EnsureRange(MapsScroll, 0, Max(0, Length(Filtered) - VISIBLE));
+
+  for i := 0 to VISIBLE - 1 do
+  begin
+    n := MapsScroll + i;
+    if n > High(Filtered) then
+      Break;
+    x := LX + 1;
+    y := LY + 2 + i * ROW;
+
+    if SameText(Filtered[n], SelectedMap) then
+      FillRect(x, y, LW - 2, ROW, Color(C_SELECTED))
+    else if Inside(x, y, LW - 2, ROW) then
+      FillRect(x, y, LW - 2, ROW, Color(C_HOVER));
+
+    if IsFavoriteMap(Filtered[n]) then
+      DrawStar(x + 18, y + ROW / 2, 9, Color(Choose(Inside(x, y, 34, ROW), $FFE680, $F1C40F)))
+    else
+      DrawStar(x + 18, y + ROW / 2, 9, Color(Choose(Inside(x, y, 34, ROW), C_TEXT, $4A5540)));
+
+    DrawText(FitText(WideString(Filtered[n]), LW - 60, 15), x + 40, y, Color(C_TEXT), 15, ROW);
+
+    if MouseClicked and Inside(x, y, 34, ROW) then
+    begin
+      ToggleFavoriteMap(Filtered[n]);
+      PlaySound(SFX_MENUCLICK);
+      // the list reorders, don't let the click hit another row
+      MouseClicked := False;
+    end
+    else if MouseClicked and Inside(x, y, LW - 2, ROW) then
+      SelectedMap := Filtered[n];
+  end;
+
+  DrawText(WideFormat(_('%d maps, %d favorite'), [Length(Filtered), FavoriteMaps.Count]),
+    LX, LY + VISIBLE * ROW + 10, Color(C_TEXT_DIM), 14, 24);
+
+  // preview
+  FillRect(RX, 92, RW, RH, Color($0B0D08));
+  StrokeRect(RX, 92, RW, RH, Color(C_PANEL_LINE));
+  if MapPreviewData.Texture <> nil then
+  begin
+    White := RGBA($FFFFFF);
+    u := MapPreviewData.Width / MapPreviewData.Texture.Width;
+    v := MapPreviewData.Height / MapPreviewData.Texture.Height;
+    // render targets are stored bottom up
+    GfxDrawQuad(MapPreviewData.Texture,
+      GfxVertex(RX + 1, 93, 0, v, White),
+      GfxVertex(RX + RW - 1, 93, u, v, White),
+      GfxVertex(RX + RW - 1, 92 + RH - 1, u, 0, White),
+      GfxVertex(RX + 1, 92 + RH - 1, 0, 0, White));
+  end
+  else if SelectedMap <> '' then
+    DrawTextCentered(_('No preview available for this map'), RX, 92, RW, RH, Color(C_TEXT_DIM));
+
+  // details
+  y := 92 + RH + 14;
+  DrawText(WideString(SelectedMap), RX, y, Color(C_ACCENT), 24, 34, True);
+  if (SelectedMap <> '') and Button(Choose(IsFavoriteMap(SelectedMap), _('Remove favorite'),
+    _('Add to favorites')), RX + RW - 200, y, 200, 34) then
+    ToggleFavoriteMap(SelectedMap);
+
+  if MapPreviewData.Texture <> nil then
+  begin
+    y := y + 42;
+    if MapPreviewData.Description <> '' then
+    begin
+      DrawText(FitText(WideString(MapPreviewData.Description), RW, 16), RX, y, Color(C_TEXT), 16, 26);
+      y := y + 28;
+    end;
+
+    Spawns := '';
+    if MapPreviewData.Spawns[1] + MapPreviewData.Spawns[2] > 0 then
+      Spawns := WideFormat(_('Alpha %d, Bravo %d'), [MapPreviewData.Spawns[1], MapPreviewData.Spawns[2]]);
+    if MapPreviewData.Spawns[0] > 0 then
+    begin
+      if Spawns <> '' then
+        Spawns := Spawns + ', ';
+      Spawns := Spawns + WideFormat(_('%d general'), [MapPreviewData.Spawns[0]]);
+    end;
+
+    Details := WideFormat(_('Polygons: %d    Scenery: %d    Spawn points: %s'),
+      [MapPreviewData.Polygons, MapPreviewData.Scenery, Spawns]);
+    DrawText(FitText(Details, RW, 15), RX, y, Color(C_TEXT_DIM), 15, 24);
+    DrawText(FitText(_('Textures: ') + WideString(MapPreviewData.Textures), RW, 15),
+      RX, y + 24, Color(C_TEXT_DIM), 15, 24);
+  end;
 end;
 
 {******************************************************************************}
@@ -2313,9 +2546,11 @@ begin
   x := 280;
   if TabButton(_('Servers'), x, 14, 150, 58, Tab = tabServers) then
     SwitchTab(tabServers);
-  if TabButton(_('Player'), x + 160, 14, 150, 58, Tab = tabPlayer) then
+  if TabButton(_('Maps'), x + 160, 14, 150, 58, Tab = tabMaps) then
+    SwitchTab(tabMaps);
+  if TabButton(_('Player'), x + 320, 14, 150, 58, Tab = tabPlayer) then
     SwitchTab(tabPlayer);
-  if TabButton(_('Graphics'), x + 320, 14, 150, 58, Tab = tabGraphics) then
+  if TabButton(_('Graphics'), x + 480, 14, 150, 58, Tab = tabGraphics) then
     SwitchTab(tabGraphics);
 
   if Button(_('Quit'), DESIGN_W - 140, 18, 100, 36) then
@@ -2329,6 +2564,7 @@ begin
   else
     case Tab of
       tabServers: DrawServersTab;
+      tabMaps: DrawMapsTab;
       tabPlayer: DrawPlayerTab;
       tabGraphics: DrawGraphicsTab;
     end;
@@ -2338,7 +2574,20 @@ begin
   if Status <> '' then
   begin
     FillRect(-OffsetX / Scale, DESIGN_H - 32, DrawW / Scale, 32, Color($0B0D08, 200));
-    DrawText(FitText(Status, DESIGN_W - 80, 15), 40, DESIGN_H - 32, Color(Choose(Status = InfoStatus, C_ACCENT, C_ERROR)), 15, 32);
+
+    // progress bar for the 1.7 client download
+    if LegacyDownloadPending and (LegacyDownloadState = ldsRunning) then
+    begin
+      FillRect(DESIGN_W - 340, DESIGN_H - 22, 300, 12, Color($11140D));
+      FillRect(DESIGN_W - 340, DESIGN_H - 22, 3 * LegacyDownloadProgress, 12, Color(C_ACCENT));
+      StrokeRect(DESIGN_W - 340, DESIGN_H - 22, 300, 12, Color(C_PANEL_LINE));
+      x := DESIGN_W - 400;
+    end
+    else
+      x := DESIGN_W - 80;
+
+    DrawText(FitText(Status, x - 40, 15), 40, DESIGN_H - 32,
+      Color(Choose(Status = InfoStatus, C_ACCENT, C_ERROR)), 15, 32);
   end;
 
   GfxEnd();
@@ -2346,8 +2595,17 @@ begin
 end;
 
 procedure InitMenu;
+var
+  LegacyDir: string;
 begin
   LoadFavorites;
+  LoadFavoriteMaps;
+
+  // maps (and their textures) the 1.7 client downloaded from servers, with
+  // the lowest priority, for the map lists and previews
+  LegacyDir := ExtractFilePath(LegacyClientPath);
+  if (LegacyDir <> '') and DirectoryExists(LegacyDir + 'downloads') then
+    PHYSFS_mount(PChar(LegacyDir + 'downloads'), '/', True);
   LegacyText := WideString(cl_legacy_client.Value);
   NameText := WideString(cl_player_name.Value);
   InitPreview;
@@ -2417,6 +2675,8 @@ begin
     if not MapVoteActive then
       HandleListKeys;
     CheckLegacyProcess;
+    CheckLegacyDownload;
+    UpdateMapPreview;
     RenderMenu;
 
     // there is nothing to simulate here, so don't burn the CPU
@@ -2434,4 +2694,5 @@ finalization
   FreeAndNil(Favorites);
   FreeAndNil(LegacyProcess);
   FreeAndNil(MapNames);
+  FreeAndNil(FavoriteMaps);
 end.

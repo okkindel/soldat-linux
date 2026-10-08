@@ -4,8 +4,7 @@
 {                                                       }
 {       While the Soldat 1.7 client runs, a hotkey      }
 {       brings up the menu to pick a map and types the  }
-{       chosen chat command into the game. The map      }
-{       vote menu of that client doesn't work.          }
+{       map vote command into the game                  }
 {                                                       }
 {*******************************************************}
 
@@ -42,6 +41,8 @@ var
   XTestFakeKeyEvent: TXTestFakeKeyEvent = nil;
 
 const
+  // the game queues key events, they don't need a frame each
+  KEY_DELAY = 4;
   // the hotkey must work with Caps Lock and Num Lock on as well
   LOCK_MASKS: array[0..3] of cuint = (0, LockMask, Mod2Mask, LockMask or Mod2Mask);
 
@@ -203,8 +204,7 @@ begin
   if Shift then
     XTestFakeKeyEvent(Dpy, ShiftCode, 0, 0);
   XFlush(Dpy);
-  // the game reads input once per frame
-  Sleep(25);
+  Sleep(KEY_DELAY);
 end;
 
 // Latin-1 characters have keysyms equal to their code.
@@ -231,10 +231,11 @@ begin
   if not ActivateWindow(FindWindow(TargetPid)) then
     Exit;
   // let the window manager hand over the focus
-  Sleep(400);
+  Sleep(150);
 
   TypeChar(ChatKey);
-  Sleep(150);
+  // the command line opens on the next frame
+  Sleep(60);
   for i := 1 to Length(Text) do
     TypeChar(Text[i]);
   PressKey(XKeysymToKeycode(Dpy, XK_Return), False);

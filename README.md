@@ -14,6 +14,7 @@ This fork is a version of opensoldat that you can build on Linux and that runs n
 
 - **Game menu.** The game starts in a menu instead of requiring `-join`, and returns there after leaving a server:
   - *Servers*: the public server list (the same one as on [soldat.pl/lobby](https://www.soldat.pl/pl/lobby)) with search, filters (mode, players, country, version, OS, password, realistic, survival), sorting, ping, favorites pinned to the top, and direct connect by address.
+  - *Maps*: all maps with a rendered preview and details (description, spawn points, textures), and favorite maps pinned to the top.
   - *Player*: nickname, colors, hair, headgear, chain and secondary weapon with a live preview of your soldier.
   - *Graphics*: monitor, window mode, resolution, vsync, frame limit, texture and scaling filters. Changes apply without a restart, and the window can be resized in windowed mode.
 - **Settings are saved** to `client.cfg`, keeping your binds.
@@ -21,7 +22,7 @@ This fork is a version of opensoldat that you can build on Linux and that runs n
 
 ### Installing
 
-Download `soldat_<version>_amd64.deb` from [Releases](https://github.com/okkindel/soldat/releases) and install it:
+Download `soldat_<version>_amd64.deb` from [Releases](https://github.com/okkindel/soldat-linux/releases) and install it:
 
 ```sh
 sudo apt install ./soldat_*_amd64.deb
@@ -34,11 +35,10 @@ Then start *Soldat* from the applications menu, or run `soldat`. The package tar
 Soldat 1.8 (this code) and Soldat 1.7.1 use different network protocols, so this client cannot talk to 1.7.1 servers itself. Nearly all public servers still run 1.7.1. To play there anyway:
 
 1. The server list shows each server's version. 1.8 servers are joined by this client directly. Servers with another version (shown in red) are joined with the **original native Soldat 1.7.1 Linux client**.
-2. That client is the official build linked from the [Soldat wiki](https://wiki.soldat.pl/index.php/Soldat_on_macOS_and_Linux). It is not part of this repository: CMake downloads it from `update.soldat.pl` while building (checking its SHA256), and the Debian package ships it in `/opt/soldat/legacy`.
+2. That client is the official build linked from the [Soldat wiki](https://wiki.soldat.pl/index.php/Soldat_on_macOS_and_Linux). It is not part of this repository or of the regular Debian package: the first time you join a 1.7.1 server, the game downloads it from `update.soldat.pl` (about 180 MB, once, with its checksum verified) into `~/.local/share/soldat/legacy`, showing the progress at the bottom of the menu, and then joins the server. When building from source, CMake downloads it into `bin/legacy` already.
 3. When you join a 1.7.1 server, the menu writes your nickname, look, display and sound settings into the 1.7.1 client's own `configs/client.cfg` (it uses the same cvars) and starts it with `-join ip port [password]`. Its binds and other settings stay untouched.
 4. Because it is the official client, the servers' anti-cheat works as usual.
-
-5. **Changing the map:** the map vote menu of the 1.7.1 client doesn't work. Press **F10** in game instead: the menu comes up with a searchable list of maps, and picking one types the map command into the game chat for you (chat key T, then Enter). The command defaults to `!map <map>`, which servers with a map script (for example the #Rzal ones) understand; it can be changed in the same panel (saved as `cl_mapvote_command`, `%s` is the map name).
+5. **Changing the map:** press **F10** in game, pick a map (favorites first) and it types `/votemap <map>` into the game.
 
 Limitations: the 1.7.1 client can't be told which monitor to use, so it opens where it decides. A custom 1.7.1 client path can be set in the field at the bottom of the *Servers* tab (saved as `cl_legacy_client`).
 
@@ -71,7 +71,7 @@ CMake 3.14+ is required.
 
 On Linux x86_64, `cmake` also downloads the native Soldat 1.7.1 client (~185 MB) into `bin/legacy`, used for 1.7.1 servers. Pass `-DADD_LEGACY_CLIENT=0` to skip it.
 
-To build an installable Debian/Ubuntu/Mint package, run `make deb` in the `build` directory. It creates `soldat_<version>_amd64.deb` (needs `dpkg-deb`, and `unzip` plus ImageMagick's `convert` for the menu icon).
+To build an installable Debian/Ubuntu/Mint package, run `make deb` in the `build` directory. It creates `soldat_<version>_amd64.deb`, which downloads the Soldat 1.7.1 client on first use. `make deb-full` creates `soldat_<version>_amd64-full.deb` with the 1.7.1 client included (for machines without internet access; it contains the closed-source Soldat 1.7.1 client). Both need `dpkg-deb`, and `unzip` plus ImageMagick's `convert` for the menu icon.
 
 #### Available flags
 

@@ -1,15 +1,22 @@
 #!/bin/sh
 # Builds a Debian package from the build output directory.
-# Usage: build-deb.sh BIN_DIR OUTPUT_DIR VERSION
-# Called by the "deb" target, see CMakeLists.txt.
+# Usage: build-deb.sh BIN_DIR OUTPUT_DIR VERSION [BUNDLE_LEGACY]
+# With BUNDLE_LEGACY=1 the Soldat 1.7.1 client is included, otherwise the
+# game downloads it from soldat.pl the first time a 1.7.1 server is joined.
+# Called by the "deb" and "deb-full" targets, see CMakeLists.txt.
 set -e
 
 BIN_DIR=$1
 OUTPUT_DIR=$2
 VERSION=$3
+BUNDLE_LEGACY=${4:-0}
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 STAGE="$OUTPUT_DIR/deb-stage"
-PACKAGE="$OUTPUT_DIR/soldat_${VERSION}_amd64.deb"
+if [ "$BUNDLE_LEGACY" = 1 ]; then
+  PACKAGE="$OUTPUT_DIR/soldat_${VERSION}_amd64-full.deb"
+else
+  PACKAGE="$OUTPUT_DIR/soldat_${VERSION}_amd64.deb"
+fi
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/DEBIAN" "$STAGE/opt/soldat" "$STAGE/usr/bin" \
@@ -19,7 +26,7 @@ mkdir -p "$STAGE/DEBIAN" "$STAGE/opt/soldat" "$STAGE/usr/bin" \
 for f in soldat soldat.smod play-regular.ttf libGameNetworkingSockets.so libstb.so; do
   cp -p "$BIN_DIR/$f" "$STAGE/opt/soldat/"
 done
-if [ -d "$BIN_DIR/legacy" ]; then
+if [ "$BUNDLE_LEGACY" = 1 ] && [ -d "$BIN_DIR/legacy" ]; then
   mkdir -p "$STAGE/opt/soldat/legacy"
   for f in soldat_x64 soldat.smod libstb.so play-regular.ttf mapslist.txt \
     banned.txt bannedhw.txt iphist.dat remote.txt; do
@@ -69,11 +76,18 @@ Section: games
 Priority: optional
 Homepage: https://github.com/opensoldat/opensoldat
 Description: Soldat 1.8 and 1.7.1 for Linux in one package
- Opensoldat 1.8 with a main menu (server browser, player and graphics
- settings), running natively on Linux. Servers running Soldat 1.7.1 are
- joined with the bundled native Soldat 1.7.1 Linux client, so both kinds
- of servers can be played from one server list.
+ Opensoldat 1.8 with a main menu (server browser, maps, player and
+ graphics settings), running natively on Linux. Servers running Soldat
+ 1.7.1 are joined with the official native Soldat 1.7.1 Linux client, so
+ both kinds of servers can be played from one server list.
 EOF
+
+if [ "$BUNDLE_LEGACY" = 1 ]; then
+  echo " This package includes the Soldat 1.7.1 client." >> "$STAGE/DEBIAN/control"
+else
+  echo " The Soldat 1.7.1 client is downloaded from soldat.pl the first time a" >> "$STAGE/DEBIAN/control"
+  echo " 1.7.1 server is joined." >> "$STAGE/DEBIAN/control"
+fi
 
 dpkg-deb --root-owner-group --build "$STAGE" "$PACKAGE"
 rm -rf "$STAGE"
