@@ -1412,7 +1412,7 @@ const
   LIST_X = 40;
   LIST_Y = 200;
   LIST_W = 920;
-  LIST_H = 420;
+  LIST_H = 422; // header and 15 whole rows
   FULL_W = 1200; // list and players panel
   HEADER_H = 30;
   FILTER_Y = 142;
