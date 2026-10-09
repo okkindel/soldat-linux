@@ -2258,6 +2258,66 @@ begin
     Result := GAMESTYLE_DEATHMATCH;
 end;
 
+// True once a UDP socket is bound to 127.0.0.1:Port.
+function LocalPortOpen(Port: Integer): Boolean;
+var
+  Lines: TStringList;
+begin
+  Result := False;
+  Lines := TStringList.Create;
+  try
+    try
+      Lines.LoadFromFile('/proc/net/udp');
+      Result := Pos(' 0100007F:' + IntToHex(Port, 4) + ' ', Lines.Text) > 0;
+    except
+      // not readable, the timeout below ends the wait
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+// Closes a map test server left running by an earlier start of the game
+// (its pid is kept in maptest/server.pid).
+procedure StopStaleTryServer;
+var
+  Lines: TStringList;
+  Pid, i: Integer;
+  CmdLine: string;
+begin
+  if not FileExists(UserDirectory + 'maptest/server.pid') then
+    Exit;
+
+  Lines := TStringList.Create;
+  try
+    Lines.LoadFromFile(UserDirectory + 'maptest/server.pid');
+    Pid := StrToIntDef(Trim(Lines.Text), 0);
+    Lines.Clear;
+    if (Pid > 0) and FileExists('/proc/' + IntToStr(Pid) + '/cmdline') then
+    begin
+      Lines.LoadFromFile('/proc/' + IntToStr(Pid) + '/cmdline');
+      CmdLine := Lines.Text;
+      // only our own map test server
+      if (Pos('soldatserver', CmdLine) > 0) and (Pos('maptest', CmdLine) > 0) then
+      begin
+        FpKill(Pid, SIGTERM);
+        for i := 1 to 50 do
+        begin
+          if not FileExists('/proc/' + IntToStr(Pid) + '/cmdline') then
+            Break;
+          Sleep(20);
+        end;
+        if FileExists('/proc/' + IntToStr(Pid) + '/cmdline') then
+          FpKill(Pid, SIGKILL);
+      end;
+    end;
+  except
+    // nothing to stop
+  end;
+  Lines.Free;
+  DeleteFile(UserDirectory + 'maptest/server.pid');
+end;
+
 // Closes the local server started for trying out a map.
 procedure StopTryMap;
 var
@@ -2279,6 +2339,7 @@ begin
       TryServer.Terminate(0);
   end;
   FreeAndNil(TryServer);
+  DeleteFile(UserDirectory + 'maptest/server.pid');
 end;
 
 // Starts a server on this computer only, with just this map and some bots,
@@ -2292,6 +2353,13 @@ var
   Bots: Integer;
 begin
   StopTryMap;
+  StopStaleTryServer;
+  if LocalPortOpen(TRY_PORT) then
+  begin
+    MenuStatus := WideFormat(_('Port %d is used by another program, the map test needs it.'),
+      [TRY_PORT]);
+    Exit;
+  end;
   ServerPath := BaseDirectory + 'soldatserver';
   if not FileExists(ServerPath) then
   begin
@@ -2353,6 +2421,14 @@ begin
   TryServer.CurrentDirectory := Dir;
   try
     TryServer.Execute;
+    // the shell execs the server, so this is the server's pid
+    Config := TStringList.Create;
+    try
+      Config.Add(IntToStr(TryServer.ProcessID));
+      Config.SaveToFile(Dir + 'server.pid');
+    finally
+      Config.Free;
+    end;
   except
     on E: Exception do
     begin
@@ -2365,25 +2441,6 @@ begin
   TryPending := True;
   TryStarted := SDL_GetTicks;
   SetInfoStatus(WideFormat(_('Starting a local server with %s...'), [WideString(Map)]));
-end;
-
-// True once a UDP socket is bound to 127.0.0.1:Port.
-function LocalPortOpen(Port: Integer): Boolean;
-var
-  Lines: TStringList;
-begin
-  Result := False;
-  Lines := TStringList.Create;
-  try
-    try
-      Lines.LoadFromFile('/proc/net/udp');
-      Result := Pos(' 0100007F:' + IntToHex(Port, 4) + ' ', Lines.Text) > 0;
-    except
-      // not readable, the timeout below ends the wait
-    end;
-  finally
-    Lines.Free;
-  end;
 end;
 
 // Joins the local server once it listens.
@@ -4169,6 +4226,8 @@ begin
 end;
 
 finalization
+  // also when the game is closed while playing a map test
+  StopTryMap;
   FreeAndNil(PreviewPlayer);
   FreeAndNil(Favorites);
   FreeAndNil(Friends);
