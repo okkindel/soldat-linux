@@ -17,7 +17,8 @@ mkdir -p "$STAGE/DEBIAN" "$STAGE/opt/soldat" "$STAGE/usr/bin" \
   "$STAGE/usr/share/applications" "$STAGE/usr/share/pixmaps"
 
 # game files, without anything the game created while being tested
-for f in soldat soldat.smod play-regular.ttf libGameNetworkingSockets.so libstb.so; do
+# soldatserver runs the local games of "Try map"
+for f in soldat soldatserver soldat.smod play-regular.ttf libGameNetworkingSockets.so libstb.so; do
   cp -p "$BIN_DIR/$f" "$STAGE/opt/soldat/"
 done
 install -m 755 "$SCRIPT_DIR/soldat.sh" "$STAGE/usr/bin/soldat"
@@ -36,7 +37,7 @@ rm -rf "$ICON_TMP"
 # readable for everyone, writable by root only; programs executable
 chmod -R u=rwX,go=rX "$STAGE"
 find "$STAGE/opt/soldat" -type f -name "*.so" -exec chmod 755 {} +
-chmod 755 "$STAGE/opt/soldat/soldat" "$STAGE/usr/bin/soldat"
+chmod 755 "$STAGE/opt/soldat/soldat" "$STAGE/opt/soldat/soldatserver" "$STAGE/usr/bin/soldat"
 
 SIZE=$(du -sk "$STAGE" | cut -f1)
 MAINTAINER="${DEB_MAINTAINER:-okkindel}"

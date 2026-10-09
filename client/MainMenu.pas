@@ -35,6 +35,9 @@ const
   FAVORITES_FILE = 'favorites.txt';
   FAVORITE_MAPS_FILE = 'favorite_maps.txt';
   FRIENDS_FILE = 'friends.txt';
+  // local server for trying out a map
+  TRY_PORT = 23999;
+  TRY_BOTS: array[0..3] of Integer = (0, 2, 4, 8);
   SERVER_PREVIEW_W = 512;
   SERVER_PREVIEW_H = 297;
   C_FRIEND = $5DADE2;
@@ -175,6 +178,10 @@ var
   WaitServer: TServerEntry;
   LastSlotCheck: UInt32 = 0;
   ServerPreview: TMapPreview;
+  TryServer: TProcess;
+  TryPending: Boolean = False;
+  TryStarted: UInt32;
+  TryBots: Integer = 1; // index into TRY_BOTS
   ServerPreviewName: string = '';
   LegacyText: WideString = '';
   LegacyProcess: TProcess;
@@ -260,6 +267,25 @@ end;
 function Inside(x, y, w, h: Single): Boolean;
 begin
   Result := (MouseX >= x) and (MouseX < x + w) and (MouseY >= y) and (MouseY < y + h);
+end;
+
+type
+  TArrow = (arLeft, arRight, arUp, arDown);
+
+// Filled triangle pointing in the given direction, the font has no arrows.
+procedure DrawArrow(cx, cy, r: Single; Dir: TArrow; c: TGfxColor);
+var
+  a, b, t: TVector2;
+begin
+  case Dir of
+    arLeft:  begin t := Vector2(cx - r, cy); a := Vector2(cx + r * 0.6, cy - r); b := Vector2(cx + r * 0.6, cy + r); end;
+    arRight: begin t := Vector2(cx + r, cy); a := Vector2(cx - r * 0.6, cy - r); b := Vector2(cx - r * 0.6, cy + r); end;
+    arUp:    begin t := Vector2(cx, cy - r); a := Vector2(cx - r, cy + r * 0.6); b := Vector2(cx + r, cy + r * 0.6); end;
+  else
+    begin t := Vector2(cx, cy + r); a := Vector2(cx - r, cy - r * 0.6); b := Vector2(cx + r, cy - r * 0.6); end;
+  end;
+  GfxDrawQuad(nil, GfxVertex(t.x, t.y, 0, 0, c), GfxVertex(a.x, a.y, 0, 0, c),
+    GfxVertex(b.x, b.y, 0, 0, c), GfxVertex(b.x, b.y, 0, 0, c));
 end;
 
 procedure DrawStar(cx, cy, r: Single; c: TGfxColor);
@@ -423,6 +449,13 @@ begin
     PlaySound(SFX_MENUCLICK);
 end;
 
+function ArrowButton(Dir: TArrow; x, y, w, h: Single): Boolean;
+begin
+  Result := Button('', x, y, w, h);
+  DrawArrow(x + w / 2, y + h / 2, Min(w, h) * 0.22, Dir,
+    Color(Choose(Inside(x, y, w, h), C_TEXT, C_TEXT_DIM)));
+end;
+
 function TabButton(const Caption: WideString; x, y, w, h: Single; Active: Boolean): Boolean;
 var
   Hover: Boolean;
@@ -547,9 +580,9 @@ begin
   if (Index >= Low(Items)) and (Index <= High(Items)) then
     DrawTextCentered(Items[Index], bx + H, y, bw - 2 * H, H, Color(C_TEXT), 16);
 
-  if Button('<', bx, y, H, H) then
+  if ArrowButton(arLeft, bx, y, H, H) then
     Result := Index - 1;
-  if Button('>', bx + bw - H, y, H, H) then
+  if ArrowButton(arRight, bx + bw - H, y, H, H) then
     Result := Index + 1;
 
   if Result < Low(Items) then
@@ -575,9 +608,9 @@ begin
     DrawTextCentered(FitText(Items[Index], w - 2 * H, 14), x + H - 4, y, w - 2 * H + 8, H,
       Color(Choose(Active, C_TEXT, C_TEXT_DIM)), 14);
 
-  if Button('<', x, y, H - 4, H) then
+  if ArrowButton(arLeft, x, y, H - 4, H) then
     Result := Index - 1;
-  if Button('>', x + w - H + 4, y, H - 4, H) then
+  if ArrowButton(arRight, x + w - H + 4, y, H - 4, H) then
     Result := Index + 1;
 
   // clicking the value goes forward as well
@@ -1514,15 +1547,15 @@ begin
   ListY := PY + PREVIEW_H + 36;
   FillRect(PX + 1, ListY - 34, PW - 2, 32, Color($2A3220));
   if Fetched then
-    Caption := WideFormat(_('Players (%d)'), [Length(Names)])
+    Caption := WideFormat(_('Players %d'), [Length(Names)])
   else
     Caption := _('Players');
-  if PanelTabButton(Caption, PX + 1, (PW - 2) * 0.4, 0) then
+  if PanelTabButton(Caption, PX + 1, (PW - 2) / 3, 0) then
     PanelTab := 0;
-  if PanelTabButton(WideFormat(_('Friends (%d)'), [Friends.Count]), PX + 1 + (PW - 2) * 0.4,
-    (PW - 2) * 0.4, 1) then
+  if PanelTabButton(WideFormat(_('Friends %d'), [Friends.Count]), PX + 1 + (PW - 2) / 3,
+    (PW - 2) / 3, 1) then
     PanelTab := 1;
-  if PanelTabButton(_('Info'), PX + 1 + (PW - 2) * 0.8, (PW - 2) * 0.2, 2) then
+  if PanelTabButton(_('Info'), PX + 1 + (PW - 2) * 2 / 3, (PW - 2) / 3, 2) then
     PanelTab := 2;
 
   y := ListY;
@@ -1536,8 +1569,7 @@ begin
     ListH := PY + PH - 4 - ListY;
     Rows := Floor(ListH / RH);
     if SelectedServer < 0 then
-      DrawText(FitText(_('Select a server to see who plays'), PW - 20, 14), PX + 10, y,
-        Color(C_TEXT_DIM), 14, RH)
+      DrawText(_('Select a server'), PX + 10, y, Color(C_TEXT_DIM), 14, RH)
     else if not Fetched then
       DrawText(_('Loading...'), PX + 10, y, Color(C_TEXT_DIM), 14, RH)
     else if Length(Names) = 0 then
@@ -1620,7 +1652,7 @@ procedure DrawServersTab;
 const
   LIST_X = 40;
   LIST_Y = 200;
-  LIST_W = 920;
+  LIST_W = 880;
   LIST_H = 422; // header and 15 whole rows
   FULL_W = 1200; // list and players panel
   HEADER_H = 30;
@@ -1786,13 +1818,13 @@ begin
   DrawText(Info, LIST_X + FULL_W - 160 - TextWidth(Info), 92, Color(C_TEXT_DIM), 15, 34);
 
   // table
-  SetColumn(0, _('Name'), scName, LIST_X + 40, 270);
-  SetColumn(1, _('Mode'), scMode, LIST_X + 315, 65);
-  SetColumn(2, _('Map'), scMap, LIST_X + 385, 165);
-  SetColumn(3, _('Players'), scPlayers, LIST_X + 555, 105);
-  SetColumn(4, _('Ping'), scPing, LIST_X + 665, 60);
-  SetColumn(5, _('Version'), scVersion, LIST_X + 730, 85);
-  SetColumn(6, _('Country'), scCountry, LIST_X + 820, 90);
+  SetColumn(0, _('Name'), scName, LIST_X + 40, 230);
+  SetColumn(1, _('Mode'), scMode, LIST_X + 275, 65);
+  SetColumn(2, _('Map'), scMap, LIST_X + 345, 165);
+  SetColumn(3, _('Players'), scPlayers, LIST_X + 515, 105);
+  SetColumn(4, _('Ping'), scPing, LIST_X + 625, 60);
+  SetColumn(5, _('Version'), scVersion, LIST_X + 690, 85);
+  SetColumn(6, _('Country'), scCountry, LIST_X + 780, 90);
 
   FillRect(LIST_X, LIST_Y, LIST_W, LIST_H, Color(C_PANEL, 230));
   StrokeRect(LIST_X, LIST_Y, LIST_W, LIST_H, Color(C_PANEL_LINE));
@@ -1801,12 +1833,15 @@ begin
   for i := Low(Columns) to High(Columns) do
   begin
     Info := Columns[i].Caption;
-    if SortColumn = Columns[i].Sort then
-      Info := Info + Choose(SortDescending, ' v', ' ^');
-
     DrawText(Info, Columns[i].x, LIST_Y, Color(Choose(SortColumn = Columns[i].Sort,
       C_ACCENT, Choose(Inside(Columns[i].x, LIST_Y, Columns[i].w, HEADER_H), C_TEXT, C_TEXT_DIM))),
       15, HEADER_H);
+    if SortColumn = Columns[i].Sort then
+    begin
+      SetFont(15);
+      DrawArrow(Columns[i].x + TextWidth(Info) + 10, LIST_Y + HEADER_H / 2, 4,
+        TArrow(Choose(SortDescending, Ord(arDown), Ord(arUp))), Color(C_ACCENT));
+    end;
 
     if MouseClicked and Inside(Columns[i].x - 6, LIST_Y, Columns[i].w, HEADER_H) then
     begin
@@ -2210,6 +2245,177 @@ const
 
 // Renders the preview of the selected map when it changed. Must run outside
 // of RenderMenu, it uses its own render target.
+// Game mode from the map name prefix.
+function MapGameMode(const Map: string): Integer;
+begin
+  if AnsiStartsText('ctf_', Map) then
+    Result := GAMESTYLE_CTF
+  else if AnsiStartsText('inf_', Map) then
+    Result := GAMESTYLE_INF
+  else if AnsiStartsText('htf_', Map) then
+    Result := GAMESTYLE_HTF
+  else
+    Result := GAMESTYLE_DEATHMATCH;
+end;
+
+// Closes the local server started for trying out a map.
+procedure StopTryMap;
+var
+  i: Integer;
+begin
+  TryPending := False;
+  if TryServer = nil then
+    Exit;
+  if TryServer.Running then
+  begin
+    FpKill(TryServer.ProcessID, SIGTERM);
+    for i := 1 to 50 do
+    begin
+      if not TryServer.Running then
+        Break;
+      Sleep(20);
+    end;
+    if TryServer.Running then
+      TryServer.Terminate(0);
+  end;
+  FreeAndNil(TryServer);
+end;
+
+// Starts a server on this computer only, with just this map and some bots,
+// and joins it once it listens.
+procedure StartTryMap(const Map: string);
+var
+  Dir, ServerPath: string;
+  Data: PHYSFS_Buffer;
+  Stream: TFileStream;
+  Config: TStringList;
+  Bots: Integer;
+begin
+  StopTryMap;
+  ServerPath := BaseDirectory + 'soldatserver';
+  if not FileExists(ServerPath) then
+  begin
+    MenuStatus := WideString('Could not find ' + ServerPath);
+    Exit;
+  end;
+
+  Dir := UserDirectory + 'maptest/';
+  ForceDirectories(Dir + 'configs');
+  ForceDirectories(Dir + 'maps');
+
+  // the map may come from the user directory or the 1.7 client's downloads
+  Data := PHYSFS_readBuffer(PChar('maps/' + Map + '.pms'));
+  if Length(Data) > 0 then
+  begin
+    Stream := TFileStream.Create(Dir + 'maps/' + Map + '.pms', fmCreate);
+    try
+      Stream.WriteBuffer(Data[0], Length(Data));
+    finally
+      Stream.Free;
+    end;
+  end;
+
+  Bots := TRY_BOTS[TryBots];
+  Config := TStringList.Create;
+  try
+    Config.Add('sv_hostname "Map test"');
+    Config.Add('sv_lobby 0');
+    Config.Add('net_ip 127.0.0.1');
+    Config.Add('net_port ' + IntToStr(TRY_PORT));
+    Config.Add('fileserver_enable 0');
+    Config.Add('sv_maplist mapslist.txt');
+    Config.Add('sv_gamemode ' + IntToStr(MapGameMode(Map)));
+    if MapGameMode(Map) = GAMESTYLE_DEATHMATCH then
+      Config.Add('bots_random_noteam ' + IntToStr(Bots))
+    else
+    begin
+      Config.Add('bots_random_alpha ' + IntToStr(Bots div 2));
+      Config.Add('bots_random_bravo ' + IntToStr(Bots - Bots div 2));
+    end;
+    Config.SaveToFile(Dir + 'configs/server.cfg');
+
+    Config.Clear;
+    Config.Add(Map);
+    Config.SaveToFile(Dir + 'configs/mapslist.txt');
+  finally
+    Config.Free;
+  end;
+  DeleteFile(Dir + 'server.log');
+
+  // the output goes to server.log
+  TryServer := TProcess.Create(nil);
+  TryServer.Executable := '/bin/sh';
+  TryServer.Parameters.Add('-c');
+  TryServer.Parameters.Add('exec "$0" -fs_portable 0 -fs_userpath "$1" -net_ip 127.0.0.1 ' +
+    '-net_port ' + IntToStr(TRY_PORT) + ' -sv_lobby 0 -fileserver_enable 0 > "$1server.log" 2>&1');
+  TryServer.Parameters.Add(ServerPath);
+  TryServer.Parameters.Add(Dir);
+  TryServer.CurrentDirectory := Dir;
+  try
+    TryServer.Execute;
+  except
+    on E: Exception do
+    begin
+      FreeAndNil(TryServer);
+      MenuStatus := WideString('Could not start the local server: ' + E.Message);
+      Exit;
+    end;
+  end;
+
+  TryPending := True;
+  TryStarted := SDL_GetTicks;
+  SetInfoStatus(WideFormat(_('Starting a local server with %s...'), [WideString(Map)]));
+end;
+
+// True once a UDP socket is bound to 127.0.0.1:Port.
+function LocalPortOpen(Port: Integer): Boolean;
+var
+  Lines: TStringList;
+begin
+  Result := False;
+  Lines := TStringList.Create;
+  try
+    try
+      Lines.LoadFromFile('/proc/net/udp');
+      Result := Pos(' 0100007F:' + IntToHex(Port, 4) + ' ', Lines.Text) > 0;
+    except
+      // not readable, the timeout below ends the wait
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+// Joins the local server once it listens.
+procedure CheckTryMap;
+begin
+  if not TryPending then
+    Exit;
+
+  if not TryServer.Running then
+  begin
+    TryPending := False;
+    MenuStatus := WideString('The local server quit, see ' + UserDirectory + 'maptest/server.log');
+    FreeAndNil(TryServer);
+    Exit;
+  end;
+
+  if LocalPortOpen(TRY_PORT) then
+  begin
+    TryPending := False;
+    SetInfoStatus('');
+    JoinIP := '127.0.0.1';
+    JoinPort := IntToStr(TRY_PORT);
+    JoinPassword := '';
+    RequestJoin;
+  end
+  else if SDL_GetTicks - TryStarted > 15000 then
+  begin
+    StopTryMap;
+    MenuStatus := _('The local server did not start in time.');
+  end;
+end;
+
 procedure UpdateMapPreview;
 begin
   if (Tab <> tabMaps) or (SelectedMap = PreviewName) then
@@ -2308,10 +2514,20 @@ begin
 
   // details
   y := 92 + RH + 14;
-  DrawText(WideString(SelectedMap), RX, y, Color(C_ACCENT), 24, 34, True);
+  DrawText(FitText(WideString(SelectedMap), RW - 570, 24), RX, y, Color(C_ACCENT), 24, 34, True);
   if (SelectedMap <> '') and Button(Choose(IsFavoriteMap(SelectedMap), _('Remove favorite'),
     _('Add to favorites')), RX + RW - 200, y, 200, 34) then
     ToggleFavoriteMap(SelectedMap);
+
+  // play the map on a local server
+  if SelectedMap <> '' then
+  begin
+    if Button(WideFormat(_('Bots: %d'), [TRY_BOTS[TryBots]]), RX + RW - 550, y, 130, 34) then
+      TryBots := (TryBots + 1) mod Length(TRY_BOTS);
+    if Button(Choose(TryPending, _('Starting...'), _('Try map')), RX + RW - 410, y, 200, 34,
+      True, not TryPending) then
+      StartTryMap(SelectedMap);
+  end;
 
   if MapPreviewData.Texture <> nil then
   begin
@@ -3766,16 +3982,19 @@ begin
   FillRect(-OffsetX / Scale, 0, DrawW / Scale, 72, Color($0B0D08, 200));
   FillRect(-OffsetX / Scale, 72, DrawW / Scale, 1, Color(C_PANEL_LINE));
   DrawText('SOLDAT', 40, -8, Color(C_ACCENT), 34, 72, True);
-  DrawText(WideString('okkindel remix  r' + REMIX_VERSION), 42, 50, Color(C_TEXT_DIM), 13, 16);
+  Caption := WideString('okkindel remix  r' + REMIX_VERSION);
+  DrawText(Caption, 42, 50, Color(C_TEXT_DIM), 13, 16);
 
-  // newer release on GitHub, opens its page
+  // newer release on GitHub, left of the Quit button, opens its page
   if UpdateAvailable(Tag, URL) then
   begin
+    SetFont(15);
     Caption := WideFormat(_('%s available'), [WideString(Tag)]);
-    // primary buttons use the bold font
-    SetFont(17, True);
-    w := TextWidth(Caption) + 32;
-    if Button(Caption, DESIGN_W - 156 - w, 18, w, 36, True) then
+    w := TextWidth(Caption);
+    x := DESIGN_W - 156 - w;
+    DrawText(Caption, x, 18, Color(Choose(Inside(x, 18, w, 36), C_TEXT, C_ACCENT)), 15, 36);
+    FillRect(x, 46, w, 1, Color(C_ACCENT));
+    if MouseClicked and Inside(x, 18, w, 36) then
       RunCommand('xdg-open', [URL], Output);
   end;
 
@@ -3870,6 +4089,9 @@ begin
     InitMenu
   else
   begin
+    // back from a map test
+    StopTryMap;
+
     // the player could have changed settings from the console in game
     NameText := WideString(cl_player_name.Value);
     SyncPreviewPlayer;
@@ -3925,6 +4147,7 @@ begin
     CheckLegacyProcess;
     CheckLegacyDownload;
     CheckWaitForSlot;
+    CheckTryMap;
     UpdateMapPreview;
     UpdateServerPreview;
     RenderMenu;
@@ -3935,9 +4158,12 @@ begin
   end;
 
   SaveSettings;
-  // quitting the launcher closes the 1.7 client as well
+  // quitting the launcher closes the 1.7 client and the map test as well
   if QuitRequested then
+  begin
     StopLegacyClient;
+    StopTryMap;
+  end;
   SDL_StopTextInput;
   SDL_ShowCursor(SDL_DISABLE);
 end;
@@ -3947,6 +4173,7 @@ finalization
   FreeAndNil(Favorites);
   FreeAndNil(Friends);
   FreeAndNil(LegacyProcess);
+  FreeAndNil(TryServer);
   FreeAndNil(MapNames);
   FreeAndNil(FavoriteMaps);
 end.

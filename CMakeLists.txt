@@ -130,7 +130,9 @@ endif()
 
 if(BUILD_CLIENT)
   add_subdirectory(client)
+endif()
 
+if(BUILD_CLIENT AND BUILD_SERVER)
   # "make deb" builds an installable Debian/Ubuntu/Mint package
   if(ADD_ASSETS)
     file(READ ${CMAKE_SOURCE_DIR}/shared/Version.txt SOLDAT_VERSION_STRING)
@@ -144,7 +146,7 @@ if(BUILD_CLIENT)
       COMMAND ${CMAKE_COMMAND} -E env DEB_MAINTAINER=${DEB_MAINTAINER}
               sh ${CMAKE_SOURCE_DIR}/packaging/linux/build-deb.sh
               ${EXECUTABLE_OUTPUT_PATH} ${CMAKE_BINARY_DIR} ${DEB_VERSION}
-      DEPENDS soldat
+      DEPENDS soldat soldatserver
       COMMENT "Building Debian package"
     )
   endif()

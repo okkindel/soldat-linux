@@ -4,18 +4,16 @@
   <a href="https://discord.soldat.pl"><img src="https://img.shields.io/discord/234733999879094272.svg" /></a>
 </div>
 
-Opensoldat is a unique 2D (side-view) multiplayer action game. It has been influenced by the best of games such as Liero, Worms, Quake, Counter-Strike, and provides a fast-paced gaming experience with tons of blood and flesh.
-
-This repository contains the source code of the so-called 1.8 version. Compared to the original version, the code has undergone many changes but is not in a finished state. We hope that by open-sourcing Soldat we can empower our community to improve the game at a faster pace.
+Soldat is a 2D (side-view) multiplayer action game influenced by Liero, Worms, Quake and Counter-Strike: fast-paced, with tons of blood and flesh.
 
 ## okkindel remix: Soldat 1.8 and 1.7.1 on Linux
 
-This fork is a version of opensoldat that you can build on Linux and that runs natively, without Wine. It adds a game menu and lets you play on both Soldat 1.8 and Soldat 1.7.1 servers from one server list.
+This fork of [opensoldat](https://github.com/opensoldat/opensoldat) (the open-source Soldat 1.8) builds and runs natively on Linux, without Wine. It adds a game menu and lets you play on both Soldat 1.8 and Soldat 1.7.1 servers from one server list.
 
 - **Game menu.** The game starts in a menu and returns there after leaving a server:
   - *Servers*: the public server list (the same one as on [soldat.pl/lobby](https://www.soldat.pl/pl/lobby)) with search, filters (mode, players, country, version, OS, password, realistic, survival, friends), sorting, ping, favorites pinned to the top, and direct connect by address. Selecting a server shows a preview of its current map, its players and its details (respawn, bonuses, anti-cheat, description); star a player to add a friend, servers where friends were seen get a blue mark. *Quick play* joins the fullest server with a free slot and a good ping among the filtered ones, and a full server can be joined automatically once a slot is free (*Join when free*).
   - *Player*: nickname, colors, hair, headgear, chain and secondary weapon with a live preview of your soldier.
-  - *Maps*: all maps with a rendered preview and details (description, spawn points, textures), and favorite maps pinned to the top.
+  - *Maps*: all maps with a rendered preview and details (description, spawn points, textures), and favorite maps pinned to the top. *Try map* starts a local server (this computer only) with the map and some bots and joins it; leaving the game stops the server.
   - *Settings*:
     - *Graphics*: monitor, window mode, resolution, vsync, frame limit, texture and scaling filters. Changes apply without a restart, and the window can be resized in windowed mode.
     - *Audio*: volume, distant battle sounds and ear ringing near explosions.
@@ -29,7 +27,7 @@ This fork is a version of opensoldat that you can build on Linux and that runs n
 
 ### Installing
 
-Releases are tagged `r<version>` (e.g. `r1.3.0`, set in `shared/RemixVersion.txt`). Download `soldat_<version>_amd64.deb` from [Releases](https://github.com/okkindel/soldat-linux/releases) and install it:
+Releases are tagged `r<version>` (e.g. `r1.4.0`, set in `shared/RemixVersion.txt`). Download `soldat_<version>_amd64.deb` from [Releases](https://github.com/okkindel/soldat-linux/releases) and install it:
 
 ```sh
 sudo apt install ./soldat_*_amd64.deb
